@@ -14,3 +14,10 @@ tests/*/results/run-*.log
 tests/*/results/run-profiles-*.log
 tests/*/results/summary-*.txt
 tests/*/results/summary-profiles-*.txt
+
+# --- separation guard: the design record lives in AgentArca-internal, never here ---
+/docs/
+/specs/
+/plan/
+/CLAUDE.md
+/AgentArca-internal/
