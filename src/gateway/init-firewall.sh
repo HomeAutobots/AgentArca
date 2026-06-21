@@ -111,7 +111,7 @@ iptables -A OUTPUT -p tcp --dport 80 -m owner --uid-owner proxy -j ACCEPT
 #
 # SHIPPED RULE: accept TCP/4873 and TCP/3141 to all RFC1918 private address ranges.
 # This covers:
-#   - Production: copilot-net (172.31.0.0/24) and cache-net (172.30.0.0/24).
+#   - Production: agent-net (172.31.0.0/24) and cache-net (172.30.0.0/24).
 #   - Test environments: Docker auto-assigned subnets (10.15.x, 10.25.x, etc.).
 # Both ranges are private Docker bridge addresses not reachable from the internet.
 # An external host on TCP/4873 or TCP/3141 has a public IP that cannot match

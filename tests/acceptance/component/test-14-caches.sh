@@ -101,7 +101,7 @@ fi
 # The proxy MUST use gateway-cache:8080 (not gateway:8080).
 # 'gateway-cache' is aliased on cache-net (172.30.0.0/24), so Squid sees
 # the connection from a 172.30.0.x source IP, matching cache_src ACL.
-# The old 'gateway' alias (copilot-net, 172.31.0.x) does NOT match cache_src,
+# The old 'gateway' alias (agent-net, 172.31.0.x) does NOT match cache_src,
 # causing ssl_bump terminate to fire after CONNECT (GP-02 root cause).
 # ------------------------------------------------------------
 begin_test "AC-14-P04" "cache services proxy upstream via gateway-cache (HTTPS_PROXY=http://gateway-cache:8080)"

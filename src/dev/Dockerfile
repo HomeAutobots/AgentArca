@@ -117,7 +117,7 @@ RUN mkdir -p /usr/local/share/empty-git-hooks && \
     git config --global credential.helper /bin/false
 
 # ITEM 14: Configure npm to use Verdaccio pull-through cache.
-# The registry URL is the internal Verdaccio service on copilot-net.
+# The registry URL is the internal Verdaccio service on agent-net.
 # This setting is baked in so that npm ci / npm install inside the container
 # resolve from the cache, not from registry.npmjs.org directly.
 # Defense-in-depth: the compose file also sets npm_config_registry in the
@@ -130,7 +130,7 @@ RUN npm config set registry http://verdaccio:4873 --global && \
     echo "npm registry configured to: $(npm config get registry --global)"
 
 # ITEM 14: Configure pip to use devpi pull-through cache.
-# The index URL is the internal devpi service on copilot-net.
+# The index URL is the internal devpi service on agent-net.
 # pip.conf is written to /etc/pip.conf (global, applies to all users).
 # Defense-in-depth: the compose file also sets PIP_INDEX_URL in the environment.
 # trusted-host: devpi is plain HTTP (internal Docker network), so pip must trust it.

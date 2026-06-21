@@ -69,7 +69,7 @@ trap teardown EXIT
 echo "############################################################"
 echo "# ITEM 16 CONTAINMENT RED-TEAM SUITE"
 echo "# FRAME: ASSUME PROMPT INJECTION SUCCEEDS; prove the boundary HOLDS."
-echo "# project=rt16  subnets: copilot-net=172.29.0.0/24 cache-net=172.28.0.0/24"
+echo "# project=rt16  subnets: agent-net=172.29.0.0/24 cache-net=172.28.0.0/24"
 echo "# date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "############################################################"
 

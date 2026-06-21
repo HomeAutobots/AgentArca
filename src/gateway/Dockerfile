@@ -74,8 +74,8 @@
 
 FROM ubuntu@sha256:4f838adc7181d9039ac795a7d0aba05a9bd9ecd480d294483169c5def983b64d
 
-LABEL org.opencontainers.image.description="Hardened Copilot dev container gateway sidecar (ADR-002, peek+splice SNI filtering)"
-LABEL org.opencontainers.image.source="https://github.com/example/copilot-devcontainer-hardening"
+LABEL org.opencontainers.image.description="Hardened AgentArca dev container gateway sidecar (ADR-002, peek+splice SNI filtering)"
+LABEL org.opencontainers.image.source="https://github.com/HomeAutobots/AgentArca"
 
 # Install runtime dependencies:
 #   squid-openssl: Squid with ssl-bump support (replaces squid, conflicts with squid pkg)

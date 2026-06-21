@@ -5,14 +5,14 @@
 # TOPOLOGY RATIONALE:
 # Same source-ACL topology as Verdaccio (see docker-compose.verdaccio.yml header).
 #
-# devpi runs on both copilot-net (for devcontainer access at http://devpi:3141)
+# devpi runs on both agent-net (for devcontainer access at http://devpi:3141)
 # and cache-net (so its upstream requests to pypi.org via HTTPS_PROXY come from
 # the 172.30.0.x subnet, matching the cache_src ACL in squid.conf).
 #
 # GP-02 FIX: Uses HTTPS_PROXY=http://gateway-cache:8080 (cache-net alias).
 # 'gateway-cache' resolves to the gateway's cache-net IP (172.30.0.x) so the CONNECT
 # request arrives at Squid from the devpi cache-net interface, matching cache_src ACL.
-# The old 'gateway' alias (copilot-net, 172.31.0.x) did NOT match cache_src, causing
+# The old 'gateway' alias (agent-net, 172.31.0.x) did NOT match cache_src, causing
 # ssl_bump terminate to fire after CONNECT 200 (httpcore.ConnectError / GP-02).
 #
 # CA/MITM: SNI-splice means NO CA cert is needed. devpi sees the real pypi.org cert.
@@ -36,9 +36,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.devpi
-    container_name: copilot-devpi
+    container_name: agentarca-devpi
     networks:
-      - copilot-net
+      - agent-net
       - cache-net
     # Named volume for devpi storage (NOT a host bind mount).
     volumes:
@@ -46,10 +46,10 @@ services:
         source: devpi-storage
         target: /devpi
     # HTTPS_PROXY: route upstream requests through the gateway (OI-14-A).
-    # GP-02 FIX: Use gateway-cache (cache-net alias) not gateway (copilot-net alias).
+    # GP-02 FIX: Use gateway-cache (cache-net alias) not gateway (agent-net alias).
     # 'gateway-cache' resolves to the gateway's cache-net IP (172.30.0.x).
     # devpi's CONNECT arrives at Squid from devpi's cache-net interface (172.30.0.x),
-    # which matches cache_src ACL. The old 'gateway' alias pointed to copilot-net IP
+    # which matches cache_src ACL. The old 'gateway' alias pointed to agent-net IP
     # (172.31.0.x), which did NOT match cache_src, causing ssl_bump terminate to fire
     # after the proxy CONNECT 200, resetting the TLS handshake (httpcore.ConnectError).
     # SNI-splice: no CA cert needed, real pypi.org cert is presented to devpi.
@@ -68,7 +68,7 @@ services:
     mem_limit: 512m
     pids_limit: 64
     # devpi listens on 3141 by default.
-    # No published ports: access is internal only via copilot-net.
+    # No published ports: access is internal only via agent-net.
     expose:
       - "3141"
     depends_on:
@@ -84,7 +84,7 @@ services:
     command: ["devpi-server", "--host", "0.0.0.0", "--port", "3141", "--serverdir", "/devpi"]
 
 networks:
-  copilot-net:
+  agent-net:
     external: true
   cache-net:
     external: true

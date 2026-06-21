@@ -9,7 +9,7 @@
 #   FIX-F2: Per-profile gateway services (gateway-copilot, gateway-claude, gateway-codex).
 #            Each has profiles: [<agent>] and HARDCODED SQUID_AGENT_FRAGMENT (not interpolated).
 #            YAML anchor x-gateway-base holds all shared hardening. Network alias 'gateway' on
-#            copilot-net lets caches find whichever gateway is active.
+#            agent-net lets caches find whichever gateway is active.
 #   FIX-F3: CLAUDE_CONFIG_DIR=/home/devuser/.claude on devcontainer-claude.
 #            CODEX_HOME=/home/devuser/.codex on devcontainer-codex (defensive).
 #   FIX-F1: env_file removed from devcontainer-claude, devcontainer-codex, AND devcontainer
@@ -21,12 +21,12 @@
 #            declaration isolation. Phase8-build-security-review-3 BLOCK-1 fix.
 #
 # GP-02 FIX 2026-06-20: devpi cache upstream fetch fails on fresh volume.
-#   ROOT CAUSE: The 'gateway' alias was only declared on copilot-net. devpi/verdaccio resolved
-#   'gateway' to the gateway's copilot-net IP (172.31.0.x). The TCP connection from devpi
-#   to gateway:8080 arrived at Squid from the devpi copilot-net interface (172.31.0.x), which
+#   ROOT CAUSE: The 'gateway' alias was only declared on agent-net. devpi/verdaccio resolved
+#   'gateway' to the gateway's agent-net IP (172.31.0.x). The TCP connection from devpi
+#   to gateway:8080 arrived at Squid from the devpi agent-net interface (172.31.0.x), which
 #   is NOT in the cache_src ACL (172.30.0.0/24). Squid's 'ssl_bump splice allowed_registry_SNI
 #   cache_src' rule requires source IP in 172.30.0.0/24 to splice pypi.org/npmjs.org. With a
-#   copilot-net source IP, the splice rule did NOT fire; ssl_bump terminate all fired instead,
+#   agent-net source IP, the splice rule did NOT fire; ssl_bump terminate all fired instead,
 #   resetting the TLS handshake with httpcore.ConnectError (empty reason = TCP RST after CONNECT 200).
 #   FIX: Add 'gateway-cache' alias on cache-net for all three gateway services. devpi and
 #   verdaccio now use HTTPS_PROXY=http://gateway-cache:8080. 'gateway-cache' resolves to the
@@ -73,9 +73,9 @@
 #
 # ITEM 14 additions:
 #   - cache-net (172.30.0.0/24): a dedicated network for cache->gateway upstream traffic.
-#     Each gateway joins both copilot-net and cache-net.
-#     Verdaccio and devpi join both copilot-net and cache-net.
-#     Devcontainer does NOT join cache-net (it shares the gateway netns on copilot-net).
+#     Each gateway joins both agent-net and cache-net.
+#     Verdaccio and devpi join both agent-net and cache-net.
+#     Devcontainer does NOT join cache-net (it shares the gateway netns on agent-net).
 #   - Source-ACL: cache containers' HTTPS_PROXY upstream requests to the gateway arrive
 #     from their cache-net IP (172.30.0.x), matching squid.conf cache_src ACL.
 #     The devcontainer's proxy requests arrive on 127.0.0.1 (gateway netns shared),
@@ -116,10 +116,10 @@ x-gateway-base: &gateway-base
   security_opt:
     - no-new-privileges:true
   networks:
-    copilot-net:
+    agent-net:
       # Network alias 'gateway' lets the devcontainer (via shared gateway netns) and
-      # other services on copilot-net find this gateway by name. Since only one profile
-      # runs at a time (D6 mutual exclusion), the alias is unambiguous on copilot-net.
+      # other services on agent-net find this gateway by name. Since only one profile
+      # runs at a time (D6 mutual exclusion), the alias is unambiguous on agent-net.
       aliases:
         - gateway
     # ITEM 14: gateway also joins cache-net so it can accept connections
@@ -128,7 +128,7 @@ x-gateway-base: &gateway-base
     # gateway via HTTPS_PROXY=http://gateway-cache:8080. 'gateway-cache' resolves to
     # the gateway's cache-net IP (172.30.0.x), so the TCP connection from devpi/verdaccio
     # to the proxy arrives at Squid from a 172.30.0.x source IP, matching cache_src ACL.
-    # Without this alias, devpi resolved 'gateway' to the copilot-net IP (172.31.0.x),
+    # Without this alias, devpi resolved 'gateway' to the agent-net IP (172.31.0.x),
     # which did NOT match cache_src, causing ssl_bump terminate to fire instead of splice.
     cache-net:
       aliases:
@@ -567,7 +567,7 @@ services:
   # ============================================================
   # ITEM 14: Verdaccio npm pull-through cache
   # No profiles: tag - starts with any profile. Reaches the active gateway via
-  # the 'gateway' network alias on copilot-net (set by whichever gateway-<agent> is active).
+  # the 'gateway' network alias on agent-net (set by whichever gateway-<agent> is active).
   # ============================================================
   verdaccio:
     # Verdaccio npm pull-through cache.
@@ -575,10 +575,10 @@ services:
     # Digest resolved 2026-06-14: docker pull verdaccio/verdaccio:5 && docker inspect --format='{{index .RepoDigests 0}}'
     # Multi-arch manifest list digest (amd64 + arm64): sha256:9d622d256378c6e7ae09f384774ee2f0f8ac67a66c066db55921a0b7218abc4c
     image: verdaccio/verdaccio:5@sha256:9d622d256378c6e7ae09f384774ee2f0f8ac67a66c066db55921a0b7218abc4c
-    container_name: copilot-verdaccio
+    container_name: agentarca-verdaccio
     networks:
-      # copilot-net: so devcontainer can reach it at http://verdaccio:4873
-      - copilot-net
+      # agent-net: so devcontainer can reach it at http://verdaccio:4873
+      - agent-net
       # cache-net: so its upstream HTTPS_PROXY requests arrive with 172.30.0.x source IP,
       # matching the cache_src ACL in squid.conf (registry SNI splice allowed for this source).
       - cache-net
@@ -593,11 +593,11 @@ services:
         source: verdaccio-storage
         target: /verdaccio/storage
     environment:
-      # GP-02 FIX: Use gateway-cache (cache-net alias) not gateway (copilot-net alias).
+      # GP-02 FIX: Use gateway-cache (cache-net alias) not gateway (agent-net alias).
       # Same routing fix as for devpi: 'gateway-cache' resolves to the gateway's cache-net
       # IP (172.30.0.x), so Verdaccio's upstream requests to npmjs.org arrive at Squid
       # from a 172.30.0.x source IP, matching cache_src ACL and triggering the correct
-      # ssl_bump splice rule. The previous 'gateway' alias pointed to the copilot-net IP
+      # ssl_bump splice rule. The previous 'gateway' alias pointed to the agent-net IP
       # (172.31.0.x), which is NOT in cache_src; registry splicing was silently blocked.
       HTTPS_PROXY: "http://gateway-cache:8080"
       HTTP_PROXY: "http://gateway-cache:8080"
@@ -633,7 +633,7 @@ services:
   # ============================================================
   # ITEM 14: devpi PyPI pull-through cache
   # No profiles: tag - starts with any profile. Reaches the active gateway via
-  # the 'gateway' network alias on copilot-net.
+  # the 'gateway' network alias on agent-net.
   # ============================================================
   devpi:
     # devpi PyPI pull-through mirror.
@@ -642,10 +642,10 @@ services:
     build:
       context: ./src/caches
       dockerfile: Dockerfile.devpi
-    container_name: copilot-devpi
+    container_name: agentarca-devpi
     networks:
-      # copilot-net: so devcontainer can reach it at http://devpi:3141
-      - copilot-net
+      # agent-net: so devcontainer can reach it at http://devpi:3141
+      - agent-net
       # cache-net: so its upstream HTTPS_PROXY requests arrive with 172.30.0.x source IP,
       # matching the cache_src ACL in squid.conf (registry SNI splice allowed for this source).
       - cache-net
@@ -655,11 +655,11 @@ services:
         source: devpi-storage
         target: /devpi
     environment:
-      # GP-02 FIX: Use gateway-cache (cache-net alias) not gateway (copilot-net alias).
+      # GP-02 FIX: Use gateway-cache (cache-net alias) not gateway (agent-net alias).
       # 'gateway-cache' resolves to the gateway's cache-net IP (172.30.0.x). The TCP
       # connection from devpi to the proxy arrives at Squid from devpi's cache-net
       # interface (172.30.0.x), matching cache_src ACL. With the old 'gateway' alias
-      # (copilot-net IP), the source was 172.31.0.x which did NOT match cache_src, so
+      # (agent-net IP), the source was 172.31.0.x which did NOT match cache_src, so
       # Squid's ssl_bump terminate fired after CONNECT, resetting the TLS handshake.
       HTTPS_PROXY: "http://gateway-cache:8080"
       HTTP_PROXY: "http://gateway-cache:8080"
@@ -689,11 +689,11 @@ services:
     # (do not override command here; the Dockerfile CMD handles it)
 
 networks:
-  copilot-net:
+  agent-net:
     driver: bridge
     # IPv6 disabled to prevent dual-stack bypass of IPv4 iptables rules (ADR-002 D5/D6d).
     enable_ipv6: false
-    # RC-14-1 FIX (2026-06-14): Pin copilot-net to a FIXED subnet so init-firewall.sh
+    # RC-14-1 FIX (2026-06-14): Pin agent-net to a FIXED subnet so init-firewall.sh
     # can destination-scope the cache-port ACCEPT rules to this subnet only.
     ipam:
       driver: default

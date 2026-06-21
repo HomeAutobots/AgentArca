@@ -10,7 +10,7 @@
 # the app honors the proxy, and even if the Codex interior sandbox is assumed defeated.
 #
 # Distinct project name (rt25-codex) + distinct subnets:
-#   rt25-codex_copilot-net: 10.46.0.0/24
+#   rt25-codex_agent-net: 10.46.0.0/24
 #   rt25-codex_cache-net:   10.46.1.0/24
 # Pre-created external by rt25-run-profiles.sh.
 #
@@ -41,8 +41,8 @@ services:
     mem_limit: 512m
 
 networks:
-  copilot-net:
-    name: rt25-codex_copilot-net
+  agent-net:
+    name: rt25-codex_agent-net
     external: true
   cache-net:
     name: rt25-codex_cache-net

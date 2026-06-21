@@ -18,13 +18,13 @@
 #   - squid.conf: ssl_bump splice allowed_registry_SNI cache_src  <- allows caches
 #     squid.conf: ssl_bump terminate allowed_registry_SNI         <- blocks devcontainer
 #
-# GP-02 FIX: The 'gateway' alias (copilot-net only) resolved to the gateway's copilot-net
+# GP-02 FIX: The 'gateway' alias (agent-net only) resolved to the gateway's agent-net
 # IP (172.31.0.x). Traffic using that alias arrived at Squid from 172.31.0.x, which does
 # NOT match cache_src (172.30.0.0/24). The ssl_bump terminate rule fired after CONNECT,
 # resetting the connection (httpcore.ConnectError). 'gateway-cache' on cache-net fixes this.
 #
 # Network layout:
-#   - copilot-net: devcontainer (via gateway netns) + gateway + verdaccio + devpi
+#   - agent-net: devcontainer (via gateway netns) + gateway + verdaccio + devpi
 #     Devcontainer reaches verdaccio at http://verdaccio:4873.
 #   - cache-net (172.30.0.0/24): gateway + verdaccio + devpi
 #     Cache containers use this network to reach the gateway proxy.
@@ -48,9 +48,9 @@ services:
     # Multi-arch manifest list digest (amd64 + arm64): verified via docker manifest inspect.
     # To re-pin on upgrade: docker pull verdaccio/verdaccio:5 && docker inspect --format='{{index .RepoDigests 0}}' verdaccio/verdaccio:5
     image: verdaccio/verdaccio:5@sha256:9d622d256378c6e7ae09f384774ee2f0f8ac67a66c066db55921a0b7218abc4c
-    container_name: copilot-verdaccio
+    container_name: agentarca-verdaccio
     networks:
-      - copilot-net
+      - agent-net
       - cache-net
     # Mount the Verdaccio config file (read-only; config is managed not agent-writable).
     # Mount the named storage volume (read-write; this is the cache).
@@ -63,7 +63,7 @@ services:
         source: verdaccio-storage
         target: /verdaccio/storage
     # HTTPS_PROXY: route upstream requests through the gateway.
-    # GP-02 FIX: Use gateway-cache (cache-net alias) not gateway (copilot-net alias).
+    # GP-02 FIX: Use gateway-cache (cache-net alias) not gateway (agent-net alias).
     # 'gateway-cache' resolves to the gateway's cache-net IP (172.30.0.x).
     # Verdaccio's CONNECT arrives at Squid from Verdaccio's cache-net interface (172.30.0.x),
     # which matches cache_src ACL and triggers ssl_bump splice for registry SNIs.
@@ -86,7 +86,7 @@ services:
     mem_limit: 512m
     pids_limit: 64
     # Verdaccio listens on 4873 (configured in verdaccio-config.yaml).
-    # No published ports: access is internal only via copilot-net.
+    # No published ports: access is internal only via agent-net.
     # The devcontainer reaches it at http://verdaccio:4873.
     expose:
       - "4873"
@@ -96,7 +96,7 @@ services:
     restart: unless-stopped
 
 networks:
-  copilot-net:
+  agent-net:
     external: true
   cache-net:
     external: true

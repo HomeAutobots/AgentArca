@@ -75,7 +75,7 @@ teardown_one() {
   if [ "$KEEP_UP" -eq 1 ]; then
     echo "[rt25] --keep-up: leaving $proj up. Tear down with:"
     echo "       docker compose -p $proj -f docker-compose.yml -f $override --profile $profile down -v"
-    echo "       docker network rm ${proj}_copilot-net ${proj}_cache-net"
+    echo "       docker network rm ${proj}_agent-net ${proj}_cache-net"
     return 0
   fi
   echo "[rt25] Tearing down $proj ..."
@@ -84,7 +84,7 @@ teardown_one() {
   docker compose -p "$proj" \
     -f "$PROJECT_ROOT/docker-compose.yml" -f "$override" --profile "$profile" \
     down -v --remove-orphans >/dev/null 2>&1 || true
-  docker network rm "${proj}_copilot-net" "${proj}_cache-net" >/dev/null 2>&1 || true
+  docker network rm "${proj}_agent-net" "${proj}_cache-net" >/dev/null 2>&1 || true
   echo "[rt25] $proj teardown complete."
 }
 
@@ -114,7 +114,7 @@ run_profile() {
   echo
   echo "============================================================"
   echo "[rt25] PROFILE=$profile  project=$proj  svc=$dcsvc"
-  echo "       subnets: copilot-net=$cop_sub  cache-net=$cache_sub"
+  echo "       subnets: agent-net=$cop_sub  cache-net=$cache_sub"
   echo "============================================================"
 
   # FIX-F2 (2026-06-20): SQUID_AGENT_FRAGMENT is now HARDCODED in each per-profile gateway
@@ -124,8 +124,8 @@ run_profile() {
   local gw_svc="gateway-${profile}"
 
   # 1. Pre-create external networks (idempotent).
-  docker network create --driver bridge --subnet "$cop_sub" "${proj}_copilot-net" >/dev/null 2>&1 \
-    || echo "[rt25] (${proj}_copilot-net exists or subnet busy)"
+  docker network create --driver bridge --subnet "$cop_sub" "${proj}_agent-net" >/dev/null 2>&1 \
+    || echo "[rt25] (${proj}_agent-net exists or subnet busy)"
   docker network create --driver bridge --subnet "$cache_sub" "${proj}_cache-net" >/dev/null 2>&1 \
     || echo "[rt25] (${proj}_cache-net exists or subnet busy)"
 

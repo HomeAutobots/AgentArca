@@ -10,7 +10,7 @@
 # multi-agent refactor.
 #
 # Distinct project name (rt25-copilot) + distinct subnets:
-#   rt25-copilot_copilot-net: 10.47.0.0/24
+#   rt25-copilot_agent-net: 10.47.0.0/24
 #   rt25-copilot_cache-net:   10.47.1.0/24
 # Pre-created external by rt25-run-profiles.sh.
 #
@@ -41,8 +41,8 @@ services:
     mem_limit: 512m
 
 networks:
-  copilot-net:
-    name: rt25-copilot_copilot-net
+  agent-net:
+    name: rt25-copilot_agent-net
     external: true
   cache-net:
     name: rt25-copilot_cache-net

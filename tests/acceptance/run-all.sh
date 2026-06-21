@@ -24,7 +24,7 @@
 #   This runner uses project name 'acc15' and compose override
 #   tests/acceptance/compose.test-override.yml which:
 #     - Removes hardcoded container_name entries (prevents naming collision)
-#     - Uses copilot-net=172.31.0.0/24 and cache-net=172.30.0.0/24 (item-15's ranges)
+#     - Uses agent-net=172.31.0.0/24 and cache-net=172.30.0.0/24 (item-15's ranges)
 #     - Lowers mem_limit to 2g to leave room for the concurrent red-teamer stack
 #   Item-16 uses project name 'red16' with 172.28.x and 172.29.x subnets.
 #
@@ -115,12 +115,12 @@ teardown() {
       --profile copilot \
       down -v 2>&1 | tee -a "${LOG_FILE}" || true
     # Remove the pre-created external networks (created before 'up')
-    docker network rm acc15_copilot-net acc15_cache-net 2>/dev/null || true
+    docker network rm acc15_agent-net acc15_cache-net 2>/dev/null || true
     log "Teardown complete. No acc15 containers/volumes/networks remain."
   elif [ "${NO_TEARDOWN}" -eq 1 ]; then
     log "WARNING: --no-teardown set. acc15 stack still running. Tear down manually:"
     log "  docker compose -p acc15 -f docker-compose.yml -f tests/acceptance/compose.test-override.yml --profile copilot down -v"
-    log "  docker network rm acc15_copilot-net acc15_cache-net"
+    log "  docker network rm acc15_agent-net acc15_cache-net"
   fi
 
   # Final summary
@@ -184,8 +184,8 @@ if [ "${SKIP_STACK}" -eq 0 ]; then
   # Pre-create external networks with specific subnets (avoids compose IPAM merge bug).
   # The override marks these as external:true; compose attaches to them instead of creating.
   log "Pre-creating external networks with non-conflicting subnets (10.15.0.0/24, 10.15.1.0/24)..."
-  docker network create --driver bridge --subnet 10.15.0.0/24 acc15_copilot-net 2>/dev/null || \
-    log "(acc15_copilot-net already exists - continuing)"
+  docker network create --driver bridge --subnet 10.15.0.0/24 acc15_agent-net 2>/dev/null || \
+    log "(acc15_agent-net already exists - continuing)"
   docker network create --driver bridge --subnet 10.15.1.0/24 acc15_cache-net 2>/dev/null || \
     log "(acc15_cache-net already exists - continuing)"
 

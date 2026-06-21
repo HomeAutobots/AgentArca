@@ -7,9 +7,9 @@
 # PURPOSE:
 #   (a) Remove hardcoded container_name entries (prevents collision with acc15/rt16/production).
 #   (b) Mark networks as external (pre-created with non-conflicting subnets by run-profiles.sh).
-#       Subnets: 10.26.0.0/24 (copilot-net) and 10.26.1.0/24 (cache-net).
+#       Subnets: 10.26.0.0/24 (agent-net) and 10.26.1.0/24 (cache-net).
 #       These do not conflict with:
-#         - production copilot-devcontainer-hardening_{copilot,cache}-net (172.30-31.0.0/24)
+#         - production agentarca_{agent,cache}-net (172.30-31.0.0/24)
 #         - acc15 (10.15.0.0/24, 10.15.1.0/24)
 #         - acc25-claude (10.25.0.0/24, 10.25.1.0/24)
 #         - rt16 (172.28-29.0.0/24)
@@ -23,12 +23,12 @@
 # host-shell export is needed (which was the Phase 8 defect).
 #
 # NETWORK PRE-CREATION (done by run-profiles.sh before 'up'):
-#   docker network create --driver bridge --subnet 10.26.0.0/24 acc25-codex_copilot-net
+#   docker network create --driver bridge --subnet 10.26.0.0/24 acc25-codex_agent-net
 #   docker network create --driver bridge --subnet 10.26.1.0/24 acc25-codex_cache-net
 #
 # TEARDOWN (run-profiles.sh):
 #   docker compose -p acc25-codex -f docker-compose.yml -f ... --profile codex down -v
-#   docker network rm acc25-codex_copilot-net acc25-codex_cache-net
+#   docker network rm acc25-codex_agent-net acc25-codex_cache-net
 
 services:
   gateway-codex:
@@ -53,8 +53,8 @@ services:
     mem_limit: 512m
 
 networks:
-  copilot-net:
-    name: acc25-codex_copilot-net
+  agent-net:
+    name: acc25-codex_agent-net
     external: true
   cache-net:
     name: acc25-codex_cache-net

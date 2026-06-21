@@ -18,7 +18,7 @@
 #   the source-ACL, instead keep the original subnets but use a unique project name +
 #   container_name removal and coordinate timing with item 15 by retrying on collision."
 #
-#   So this override KEEPS the production subnets (copilot-net=172.31.0.0/24,
+#   So this override KEEPS the production subnets (agent-net=172.31.0.0/24,
 #   cache-net=172.30.0.0/24) which match the BAKED firewall + squid source-ACL (so the
 #   devcontainer-cannot-reach-registry-directly containment test stays VALID), and isolates
 #   from item-15 via:

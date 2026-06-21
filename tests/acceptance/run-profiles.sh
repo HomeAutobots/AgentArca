@@ -34,9 +34,9 @@
 #   (Copilot regression reuses the acc15 runner directly)
 #
 # Subnet allocation (must not conflict with acc15 10.15.x or rt16 172.28-29.x):
-#   acc25-claude_copilot-net: 10.25.0.0/24
+#   acc25-claude_agent-net: 10.25.0.0/24
 #   acc25-claude_cache-net:   10.25.1.0/24
-#   acc25-codex_copilot-net:  10.26.0.0/24
+#   acc25-codex_agent-net:  10.26.0.0/24
 #   acc25-codex_cache-net:    10.26.1.0/24
 #
 # Exit codes:
@@ -129,7 +129,7 @@ get_override_file() {
 
 get_networks_for_proj() {
   local proj="$1"
-  echo "${proj}_copilot-net ${proj}_cache-net"
+  echo "${proj}_agent-net ${proj}_cache-net"
 }
 
 teardown_stack() {
@@ -145,12 +145,12 @@ teardown_stack() {
       --profile "${profile}" \
       down -v 2>&1 | tee -a "${LOG_FILE}" || true
     # Remove pre-created external networks
-    docker network rm "${proj}_copilot-net" "${proj}_cache-net" 2>/dev/null || true
+    docker network rm "${proj}_agent-net" "${proj}_cache-net" 2>/dev/null || true
     log "${proj} teardown complete."
   else
     log "WARNING: --no-teardown set. ${proj} stack still running."
     log "  Tear down manually: docker compose -p ${proj} -f docker-compose.yml -f ${override_file} --profile ${profile} down -v"
-    log "  Then: docker network rm ${proj}_copilot-net ${proj}_cache-net"
+    log "  Then: docker network rm ${proj}_agent-net ${proj}_cache-net"
   fi
 }
 
@@ -178,15 +178,15 @@ bring_up_stack() {
   case "${profile}" in
     claude)
       log "Pre-creating networks for ${proj} (10.25.0.0/24, 10.25.1.0/24)..."
-      docker network create --driver bridge --subnet 10.25.0.0/24 "${proj}_copilot-net" 2>/dev/null || \
-        log "(${proj}_copilot-net already exists)"
+      docker network create --driver bridge --subnet 10.25.0.0/24 "${proj}_agent-net" 2>/dev/null || \
+        log "(${proj}_agent-net already exists)"
       docker network create --driver bridge --subnet 10.25.1.0/24 "${proj}_cache-net" 2>/dev/null || \
         log "(${proj}_cache-net already exists)"
       ;;
     codex)
       log "Pre-creating networks for ${proj} (10.26.0.0/24, 10.26.1.0/24)..."
-      docker network create --driver bridge --subnet 10.26.0.0/24 "${proj}_copilot-net" 2>/dev/null || \
-        log "(${proj}_copilot-net already exists)"
+      docker network create --driver bridge --subnet 10.26.0.0/24 "${proj}_agent-net" 2>/dev/null || \
+        log "(${proj}_agent-net already exists)"
       docker network create --driver bridge --subnet 10.26.1.0/24 "${proj}_cache-net" 2>/dev/null || \
         log "(${proj}_cache-net already exists)"
       ;;

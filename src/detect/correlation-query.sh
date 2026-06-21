@@ -156,7 +156,7 @@ query_otel_spans() {
 
 # Query Squid proxy access.log for events in the session's timestamp window.
 # Proxy log does not natively contain session_id; join by client IP + timestamp window.
-# The client IP is the dev container's IP (fixed in the copilot-net bridge network).
+# The client IP is the dev container's IP (fixed in the agent-net bridge network).
 # SPEC-07 section 4: join by "client IP (the container's IP) and timestamp window."
 query_proxy_log() {
   local proxy_file="$1"

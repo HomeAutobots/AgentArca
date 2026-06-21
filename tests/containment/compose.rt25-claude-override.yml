@@ -8,7 +8,7 @@
 #
 # Distinct project name (rt25-claude) + distinct subnets keep this from colliding with
 # acc25-claude (10.25.x), acc15 (10.15.x), rt16 (172.28-29.x / 172.30-31.x), or production.
-#   rt25-claude_copilot-net: 10.45.0.0/24
+#   rt25-claude_agent-net: 10.45.0.0/24
 #   rt25-claude_cache-net:   10.45.1.0/24
 # Networks are pre-created external by rt25-run-profiles.sh (mirrors the test-engineer's
 # acc25 pattern). The init-firewall RFC1918-wide cache-port rules + the squid cache_src
@@ -41,8 +41,8 @@ services:
     mem_limit: 512m
 
 networks:
-  copilot-net:
-    name: rt25-claude_copilot-net
+  agent-net:
+    name: rt25-claude_agent-net
     external: true
   cache-net:
     name: rt25-claude_cache-net

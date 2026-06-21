@@ -188,7 +188,7 @@ services:
 networks:
   detect-net:
     driver: bridge
-    # Internal only: not connected to the copilot-net (item 08 gateway network).
+    # Internal only: not connected to the agent-net (item 08 gateway network).
     # The devcontainer reaches the ingest-proxy via host.docker.internal, NOT via
     # this bridge network directly. Separation of duties enforced by network topology.
     enable_ipv6: false

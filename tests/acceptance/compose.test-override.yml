@@ -12,11 +12,11 @@
 #   (d) Mount Squid conf.d snippet extending cache_src ACL for test subnet.
 #
 # NETWORK SETUP (run once before this override; see run-all.sh which does this):
-#   docker network create --driver bridge --subnet 10.15.0.0/24 acc15_copilot-net
+#   docker network create --driver bridge --subnet 10.15.0.0/24 acc15_agent-net
 #   docker network create --driver bridge --subnet 10.15.1.0/24 acc15_cache-net
 #
 # SUBNET ALLOCATION:
-#   acc15_copilot-net: 10.15.0.0/24  (item-15; distinct from item-16's 172.31.0.0/24)
+#   acc15_agent-net: 10.15.0.0/24  (item-15; distinct from item-16's 172.31.0.0/24)
 #   acc15_cache-net:   10.15.1.0/24  (item-15; distinct from item-16's 172.30.0.0/24)
 #
 # The init-firewall.sh RFC1918-wide rules (10.0.0.0/8 accepted for cache ports)
@@ -29,7 +29,7 @@
 #
 # TEARDOWN (run-all.sh does this automatically):
 #   docker compose -p acc15 -f docker-compose.yml -f tests/acceptance/compose.test-override.yml down -v
-#   docker network rm acc15_copilot-net acc15_cache-net
+#   docker network rm acc15_agent-net acc15_cache-net
 
 services:
   gateway-copilot:
@@ -56,8 +56,8 @@ services:
 # Mark networks as external: Compose will attach to the pre-created networks
 # rather than trying to create them (and thus bypasses the IPAM merge issue).
 networks:
-  copilot-net:
-    name: acc15_copilot-net
+  agent-net:
+    name: acc15_agent-net
     external: true
   cache-net:
     name: acc15_cache-net

@@ -22,7 +22,7 @@ RM-no-foreign-token-volume,claude,no other profile's token/cache volume mounted,
 RM-no-foreign-env-bleed,claude,other agents' credential env vars absent/empty,no foreign non-empty credential env present,no
 RM-workspace-is-the-only-shared-surface,claude,workspace shared by design (R-m accepted carried risk),workspace mounted; isolation is token/cache/env per 3a/3b,no
 IMM-config-claude-EROFS,claude,settings/config immutable (MS_RDONLY bind mount),bash: line 1: /home/devuser/.claude/settings.json: Read-only file system;bash: line 1: /home/devuser/.claude/settings.json: Read-only file system;APPEND=1;TRUNC=1;rm: cannot remove '/home/devuser/.claude/settings.json': Device or resource b,no
-IMM-mcp-json-claude,claude,.mcp.json immutable (ro bind mount  Claude-Code boundary),APPEND=1;TRUNC=1;bash: line 1: /workspace/.mcp.json: Read-only file system;bash: line 1: /workspace/.mcp.json: Read-only file system;rm: cannot remove '/workspace/.mcp.json': Device or resource busy;RM=1,no
+IMM-mcp-json-claude,claude,.mcp.json immutable (ro bind mount  Claude-Code boundary),APPEND=1;bash: line 1: /workspace/.mcp.json: Read-only file system;bash: line 1: /workspace/.mcp.json: Read-only file system;TRUNC=1;rm: cannot remove '/workspace/.mcp.json': Device or resource busy;RM=1,no
 IMM-hook-rewrite-claude,claude,PreToolUse hook immutable (EROFS),bash: line 1: /workspace/.github/hooks/pretooluse.sh: Read-only file system;EXIT=1,no
 IMM-chattr-claude,claude,chattr cannot clear immutability (no CAP_LINUX_IMMUTABLE),chattr: Operation not supported while reading flags on /home/devuser/.claude/settings.json;EXIT=1,no
 IMM-remount-rw-claude,claude,remount rw EPERM (no CAP_SYS_ADMIN),mount: /home/devuser/.claude/settings.json: must be superuser to use mount.;EXIT=32,no
@@ -57,7 +57,7 @@ NONUNION-codex-blocks-api.github.com,codex,other-agent host blocked (fragments n
 RM-no-foreign-token-volume,codex,no other profile's token/cache volume mounted,only own (/home/devuser/.codex) + workspace + managed ro mounts present,no
 RM-no-foreign-env-bleed,codex,other agents' credential env vars absent/empty,no foreign non-empty credential env present,no
 RM-workspace-is-the-only-shared-surface,codex,workspace shared by design (R-m accepted carried risk),workspace mounted; isolation is token/cache/env per 3a/3b,no
-IMM-config-codex-EROFS,codex,settings/config immutable (MS_RDONLY bind mount),APPEND=1;TRUNC=1;bash: line 1: /home/devuser/.codex/config.toml: Read-only file system;bash: line 1: /home/devuser/.codex/config.toml: Read-only file system;rm: cannot remove '/home/devuser/.codex/config.toml': Device or resource busy;RM=1,no
+IMM-config-codex-EROFS,codex,settings/config immutable (MS_RDONLY bind mount),bash: line 1: /home/devuser/.codex/config.toml: Read-only file system;bash: line 1: /home/devuser/.codex/config.toml: Read-only file system;APPEND=1;TRUNC=1;rm: cannot remove '/home/devuser/.codex/config.toml': Device or resource busy;RM=1,no
 IMM-mcp-json-codex,codex,no managed .mcp.json mount for codex (MCP control = immutable settings in 4a),n/a for codex; covered by IMM-config-codex (allowManagedMcpServersOnly / zero-server config),no
 IMM-hook-rewrite-codex,codex,PreToolUse hook immutable (EROFS),bash: line 1: /workspace/.github/hooks/pretooluse.sh: Read-only file system;EXIT=1,no
 IMM-chattr-codex,codex,chattr cannot clear immutability (no CAP_LINUX_IMMUTABLE),chattr: Operation not supported while reading flags on /home/devuser/.codex/config.toml;EXIT=1,no
