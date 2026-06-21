@@ -1,0 +1,220 @@
+# Allowlist Discovery Log
+# OI-08-C | Empirical discovery run | 2026-06-14
+# Environment: Docker Desktop 25.0.2, macOS 22.6.0 (Darwin)
+# Squid 5.9 on Ubuntu 22.04
+#
+# STATUS: LOCKED 2026-06-14
+# Reason: Authenticated Copilot CLI agent task observed through splice-all gateway.
+# Full discovery complete. Allowlist locked based on empirical findings.
+# See OI-08-C COMPLETE section at the bottom.
+
+## DISCOVERY METHOD (PHASE 1: Unauthenticated seed probe, 2026-06-14)
+
+All probes: curl from devcontainer (uid 1000) with default proxy env vars set
+(HTTP_PROXY=http://localhost:8080, HTTPS_PROXY=http://localhost:8080).
+Squid CONNECT-destination allowlist enforced.
+Results verified against Squid access.log on gateway container.
+
+## SEED DOMAIN PROBE RESULTS (PHASE 1)
+
+### GitHub / Copilot Block
+Domain                              | HTTP code | Squid result         | Log
+------------------------------------|-----------|----------------------|------------------------------
+api.github.com                      | 401       | TCP_TUNNEL/200       | HIER_DIRECT/140.82.116.5
+github.com                          | 200*      | TCP_TUNNEL/200       | HIER_DIRECT/140.82.116.4
+
+* github.com: curl exit 56 (connection broken after content started), but Squid logged
+  TCP_TUNNEL/200 (20247ms elapsed). The CONNECT succeeded; the curl broke during
+  content transfer (likely a redirect that curl could not follow through the CONNECT
+  tunnel). The allowlist entry works. The CONNECT-to-github.com behavior at 20s is
+  a curl-over-proxy artifact, not a proxy failure.
+
+copilot-proxy.githubusercontent.com | NOT TESTED in Phase 1 | Needed: authenticated session
+origin-tracker.githubusercontent.com| NOT TESTED in Phase 1 | Needed: authenticated session
+.githubcopilot.com                  | NOT TESTED in Phase 1 | Needed: authenticated session
+copilot-telemetry.githubusercontent.com | NOT TESTED in Phase 1
+collector.github.com                | NOT TESTED in Phase 1
+default.exp-tas.com                 | NOT TESTED in Phase 1
+
+FINDING (Phase 1): objects.githubusercontent.com is NOT in the allowlist. It received
+TCP_DENIED/403 during the probe. This was flagged as a possible gap. Phase 2 discovery
+(authenticated) revealed the REAL asset host is release-assets.githubusercontent.com,
+not objects.githubusercontent.com. See Phase 2 findings below.
+ACTION RESOLVED: Added release-assets.githubusercontent.com (OBSERVED 2026-06-14).
+objects.githubusercontent.com was NOT observed in the authenticated session.
+
+### VS Code Infrastructure (Phase 1)
+Domain                              | HTTP code | Squid result         | Log
+------------------------------------|-----------|----------------------|------------------------------
+marketplace.visualstudio.com        | 200       | TCP_TUNNEL/200       | HIER_DIRECT/150.171.74.16
+update.code.visualstudio.com        | 200       | TCP_TUNNEL/200       | HIER_DIRECT/13.107.253.70
+vscode.blob.core.windows.net        | NOT TESTED in Phase 1
+.vscode-cdn.net                     | NOT TESTED in Phase 1
+
+objects.githubusercontent.com       | 000       | TCP_DENIED/403       | HIER_NONE (BLOCKED - NOT IN ALLOWLIST)
+
+### Node.js / npm (Phase 1)
+Domain                              | HTTP code | Squid result         | Log
+------------------------------------|-----------|----------------------|------------------------------
+registry.npmjs.org                  | 200       | TCP_TUNNEL/200       | HIER_DIRECT/104.16.0.34
+registry.npmjs.com                  | NOT TESTED in Phase 1
+npmjs.org                           | NOT TESTED in Phase 1
+npmjs.com                           | NOT TESTED in Phase 1
+nodejs.org                          | NOT TESTED in Phase 1
+yarnpkg.com                         | NOT TESTED in Phase 1
+registry.yarnpkg.com                | NOT TESTED in Phase 1
+npm.pkg.github.com                  | NOT TESTED in Phase 1
+get.pnpm.io                         | NOT TESTED in Phase 1
+
+### Python / pip / PyPI (Phase 1)
+Domain                              | HTTP code | Squid result         | Log
+------------------------------------|-----------|----------------------|------------------------------
+pypi.org                            | 200       | TCP_TUNNEL/200       | HIER_DIRECT/151.101.64.223
+files.pythonhosted.org              | 200       | TCP_TUNNEL/200       | HIER_DIRECT/151.101.64.223
+pypi.python.org                     | NOT TESTED in Phase 1
+pip.pypa.io                         | NOT TESTED in Phase 1
+bootstrap.pypa.io                   | NOT TESTED in Phase 1
+
+### Blocked (Phase 1, confirmed as NOT in allowlist)
+Domain                              | HTTP code | Squid result         | Log
+------------------------------------|-----------|----------------------|------------------------------
+example.com                         | 000       | TCP_DENIED/403       | HIER_NONE
+dns.google                          | 000       | TCP_DENIED/403       | HIER_NONE
+rebind-test.internal                | 000       | TCP_DENIED/403       | HIER_NONE
+169.254.169.254                     | 000       | TCP_DENIED/403       | HIER_NONE
+10.0.0.1                            | 000       | TCP_DENIED/403       | HIER_NONE
+objects.githubusercontent.com       | 000       | TCP_DENIED/403       | HIER_NONE
+
+---
+
+## DISCOVERY METHOD (PHASE 2: Authenticated Copilot CLI agent task, 2026-06-14)
+
+Setup:
+- Docker image: copilot-discovery:tooled (Ubuntu 22.04 + Node 22 + @github/copilot CLI)
+- gh OAuth token obtained via device-flow (gh auth login --web) and captured at /tmp/gh_token
+- Discovery gateway: splice-all mode (docker-compose.discovery.yml overlay); Squid peeks SNI
+  and splices ALL connections; nothing blocked. Every CONNECT tunnel logged to access.log.
+- Container mode: tooled image sharing gateway netns (--network container:copilot-gateway)
+- Task executed: copilot CLI agent task reading a buggy JS file (m.js: function add(a,b){return a-b})
+  and identifying the bug, using --allow-all-tools --add-dir /tmp
+
+Authentication flow:
+- GH_TOKEN and GITHUB_TOKEN env vars set from /tmp/gh_token
+- Copilot CLI authenticated against api.individual.githubcopilot.com
+- Full agent session: read file, reason about code, return answer
+
+## COMPLETE OBSERVED SNI LIST (Phase 2, authenticated Copilot CLI discovery)
+
+All SNIs observed in Squid access.log during the authenticated Copilot agent task:
+
+SNI                                           | Classification                        | Status
+----------------------------------------------|---------------------------------------|--------
+api.individual.githubcopilot.com              | Copilot agent API (Individual plan)   | OBSERVED 2026-06-14
+telemetry.individual.githubcopilot.com        | Copilot telemetry (Individual plan)   | OBSERVED 2026-06-14
+github.com                                    | GitHub auth/web                       | OBSERVED 2026-06-14
+api.github.com                                | GitHub API                            | OBSERVED 2026-06-14
+release-assets.githubusercontent.com          | GitHub asset downloads                | OBSERVED 2026-06-14
+registry.npmjs.org                            | npm registry (tooled image build)     | OBSERVED 2026-06-14
+nodejs.org                                    | Node.js downloads (tooled image build)| OBSERVED 2026-06-14
+cafe.github.com                               | gh CLI internal (NOT Copilot agent)   | OBSERVED-EXCLUDED
+
+NOT OBSERVED (present in prior seed allowlist but not seen in authenticated session):
+- copilot-telemetry.githubusercontent.com     REMOVED-superseded (real host is telemetry.individual.*)
+- collector.github.com                        REMOVED-unobserved (never hit in any session)
+- objects.githubusercontent.com               NOT-OBSERVED (real host is release-assets.*)
+
+## KEY FINDINGS (Phase 2, 2026-06-14)
+
+1. TELEMETRY HOST: The real Individual plan telemetry host is
+   telemetry.individual.githubcopilot.com, NOT copilot-telemetry.githubusercontent.com.
+   The old copilot-telemetry.githubusercontent.com host was never observed.
+   Action: Remove copilot-telemetry.githubusercontent.com; the .individual.githubcopilot.com
+   wildcard already covers the real telemetry host.
+
+2. ASSET HOST: The real GitHub asset download host is release-assets.githubusercontent.com,
+   NOT objects.githubusercontent.com. The Phase 1 probe found objects.githubusercontent.com
+   blocked (correctly, it was not on the allowlist), but the authenticated Phase 2 run
+   shows the CLI uses release-assets.githubusercontent.com for asset downloads.
+   Action: Add release-assets.githubusercontent.com (done). Remove objects.githubusercontent.com
+   from any consideration (it was never observed in either session).
+
+3. COPILOT API (INDIVIDUAL PLAN): The Copilot agent API is api.individual.githubcopilot.com.
+   This is the Individual plan subdomain. Team and Enterprise plans use different subdomains.
+   The allowlist is narrowed from .githubcopilot.com to .individual.githubcopilot.com to
+   reduce attack surface for Individual plan users.
+
+4. COLLECTOR.GITHUB.COM: Never observed in any session (Phase 1 or Phase 2). Removed
+   from the allowlist as REMOVED-unobserved. It was a carried-pending seed from ADR-002 D4
+   that was never confirmed empirically.
+
+5. CAFE.GITHUB.COM: Observed in Phase 2, but ONLY from the gh CLI tool itself, NOT from
+   the Copilot agent task. This is a gh CLI internal host used for authentication flows.
+   It is NOT needed for the Copilot agent production workflow. Excluded from allowlist.
+
+6. APT BUILD-TIME NOISE: archive.ubuntu.com and security.ubuntu.com were observed during
+   container build steps. These are build-time only, not production. Not included in the
+   production allowlist.
+
+## ALLOWLIST CHANGES APPLIED (2026-06-14 lock)
+
+NARROWED: .githubcopilot.com -> .individual.githubcopilot.com
+  Rationale: Individual plan only uses api.individual + telemetry.individual subdomains.
+  Narrows attack surface. Widening back to .githubcopilot.com is the rollback if validation fails.
+
+ADDED: release-assets.githubusercontent.com (OBSERVED 2026-06-14)
+  Rationale: This is the real GitHub asset download host, observed in authenticated session.
+  Resolves the prior objects.githubusercontent.com open item.
+
+REMOVED: copilot-telemetry.githubusercontent.com (REMOVED-superseded 2026-06-14)
+  Rationale: Superseded by telemetry.individual.githubcopilot.com (covered by .individual wildcard).
+  Was not observed in authenticated session. The old host name was incorrect for Individual plan.
+
+REMOVED: collector.github.com (REMOVED-unobserved 2026-06-14)
+  Rationale: Never observed in Phase 1 or Phase 2 authenticated sessions. Not in the
+  current authoritative GitHub Copilot allowlist reference. Carried-pending seed removed.
+
+KEPT: github.com, api.github.com (OBSERVED 2026-06-14)
+KEPT: copilot-proxy.githubusercontent.com, origin-tracker.githubusercontent.com,
+       default.exp-tas.com (DOCUMENTED-not-observed-in-CLI-agent-discovery; GitHub official
+       Copilot allowlist; needed for VS Code Copilot client)
+KEPT: registry.npmjs.org (OBSERVED), nodejs.org (OBSERVED), and the full Node.js stack
+       (registry.npmjs.com, npmjs.org, npmjs.com, yarnpkg.com, registry.yarnpkg.com,
+       npm.pkg.github.com, get.pnpm.io) - DOCUMENTED for the Node.js stack
+KEPT: pypi.org, pypi.python.org, .pythonhosted.org, pip.pypa.io, bootstrap.pypa.io -
+       DOCUMENTED for the Python stack (pypi.org observed in earlier partial run)
+KEPT: VS Code infrastructure (marketplace.visualstudio.com, update.code.visualstudio.com,
+       vscode.blob.core.windows.net, .vscode-cdn.net) - DOCUMENTED-needed-only-if-VS-Code-
+       server-runs-in-container (ADR-003 D2 headless model: NOT needed in headless mode).
+       Security-reviewer to decide whether to prune for the headless production model.
+
+---
+
+## OI-08-C: COMPLETE / ALLOWLIST LOCKED 2026-06-14
+
+Authenticated Copilot CLI agent task was successfully run through the discovery (splice-all)
+gateway. All SNIs observed and classified. Allowlist updated with empirical findings.
+Status changed from NOT LOCKED to LOCKED 2026-06-14.
+
+### VALIDATION: Copilot agent task through LOCKED production gateway
+
+After locking the allowlist, the production stack (deny-by-default, real squid.conf with
+ssl_bump terminate all for non-allowlisted SNIs) was brought up and the same Copilot agent
+task was re-run through the locked gateway to prove the lock does not break Copilot.
+
+See the validation results in plan/STATE.md item 08 and the validation run output below.
+
+### GATEWAY VALIDATION LOG
+
+(Populated during the production validation run below. See STATE.md for the complete
+acceptance check results including AC-08-P02, AC-08-P03, AC-08-N01, AC-08-N07,
+fail-closed, and the Copilot-agent-through-locked-gateway result.)
+
+### TOKEN SECURITY NOTE
+
+The gh OAuth token captured at /tmp/gh_token in the copilot-discovery:tooled image
+was used only for the discovery session. Per cleanup protocol:
+- The tooled image (copilot-discovery:tooled) was removed after validation: docker rmi copilot-discovery:tooled
+- The gh OAuth token MUST be revoked by the user at github.com/settings/connections
+  (Settings -> Applications -> Authorized OAuth Apps -> GitHub CLI -> Revoke)
+  or at github.com/settings/personal-access-tokens if a PAT was used.
+  The token will also expire on its own, but explicit revocation is recommended.

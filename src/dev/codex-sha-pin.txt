@@ -1,0 +1,37 @@
+sha512-FMnN12kJzVPljMTYRydLCNgd0cXXmVasNSfq2PtS42RMEIxoQ3dHtMvmno35hu2tfwrKNAAPCm4s+2PaFTEBGg==  0.140.0
+# src/dev/codex-sha-pin.txt  (canonical copy is docs/decisions/codex-sha-pin.txt; this copy is
+# in the Docker build context ./src so Dockerfile.codex can COPY it in at build time)
+#
+# What this SHA covers:
+#   npm dist.integrity field for @openai/codex@0.140.0 as returned by the npm registry.
+#   This is the SHA-512 hash of the gzipped tarball published to the npm registry.
+#   It is the value that npm itself uses to verify the downloaded package.
+#   Format: sha512-<base64> (npm ssri / Subresource Integrity format).
+#   This is NOT a sha256sum of the installed codex binary on disk (which varies by
+#   Node.js/npm version and platform). The npm integrity hash is the upstream supply-chain
+#   anchor; it confirms the tarball matches what the registry served at pin time.
+#
+# Cross-check (npm dist.shasum, SHA-1 of tarball): 259f8135c5d9bae93d3d87753fa398e8b245cac2
+#
+# HONEST LIMIT (R-j annotation, SPEC-22 section 5):
+#   This confirms the artifact matches the npm registry's record for this version, but
+#   there is no cryptographic chain to the publisher. A compromised-publisher re-publish
+#   under the same version is harder to detect than with a signed manifest (which Claude
+#   Code has via its signed apt/npm repo). The wider R-j window for Codex is accepted,
+#   not solved. See residual-risk-register.md.
+#
+# NOTE on SHA-verify step in Dockerfile.codex:
+#   The Dockerfile SHA-verify step reads the FIRST token on line 1 of this file.
+#   If the recorded value starts with "sha512-", it does NOT match sha256sum output.
+#   The Dockerfile checks for a PENDING placeholder and logs a warning; it does not
+#   hard-fail on a format mismatch. The npm integrity value is recorded here for the
+#   R-j audit trail. To use it in a hard verify, the Dockerfile would need to use
+#   `npm pack` + `npm integrity check` rather than sha256sum. This is a known
+#   limitation: the binary-sha256 approach requires a live install to compute the
+#   platform-specific binary hash. The npm dist.integrity is the upstream anchor.
+#   Status: npm dist.integrity recorded; binary sha256 requires post-install computation.
+#
+# Version: 0.140.0 (latest dist-tag concrete version, 2026-06-17)
+# Date recorded: 2026-06-17
+# Recorded by: implementer (npm view @openai/codex@0.140.0 dist.integrity dist.shasum)
+# Registry source: https://registry.npmjs.org/@openai/codex/0.140.0

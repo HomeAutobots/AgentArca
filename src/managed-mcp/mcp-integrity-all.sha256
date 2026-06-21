@@ -1,0 +1,8 @@
+# mcp-integrity-all.sha256
+# Generated: 2026-06-17T04:13:01-07:00
+# Format: <sha256>  <agent>/<filename>
+# SPEC-24 section 6, ADR-008 D5
+# Regenerate: bash src/managed-mcp/generate-mcp-integrity-manifest.sh
+888c88442618894b95b6c4d0ccad2c87ab17603a0da3b18867573e916164d17c  copilot/mcp.json
+cac22f6a1d6041359fb2079803827d772711b6bc886b847f6bc99c20ff8ba774  claude/.mcp.json
+f7e441c4014e40e4b41e04f23af9012f049075ab7568b191e184bd49a9b1c6ca  codex/config.toml

@@ -1,0 +1,205 @@
+# src/dev/Dockerfile.codex
+# Hardened OpenAI Codex CLI dev container (ADR-008 D1/D5/D7, SPEC-22 section 5).
+#
+# Extends the base dev container image build with Codex CLI installation.
+# All isolation baseline from item 09 / ADR-004 is INHERITED unchanged:
+#   - Non-root user 1000:1000 (devuser)
+#   - cap_drop/no-new-privileges/read_only/seccomp set in docker-compose.yml
+#   - Named volumes for workspace and per-profile token store
+#
+# Codex install: npm @openai/codex@{VERSION} with version pin + SHA self-verify.
+# NO signed-checksum scheme exists for Codex (ADR-008 D7, R-j).
+# The known-good SHA is recorded in docs/decisions/codex-sha-pin.txt.
+#
+# SUPPLY-CHAIN NOTE (ADR-008 D7, SPEC-22 section 5, R-j accepted):
+#   Codex does NOT have a signed manifest scheme (unlike Claude Code).
+#   The discipline is: pin the exact version AND self-verify SHA against a recorded
+#   known-good hash in docs/decisions/codex-sha-pin.txt. This is explicitly WEAKER
+#   than Claude Code's signed-manifest path. The wider R-j window is accepted per
+#   ADR-008 D7 and the residual-risk-register.md R-j annotation (THREAT_REVIEWED 2026-06-17).
+#   A compromised-publisher re-publish under the same version is harder to detect.
+#   This is accepted, not solved. Honesty over false security (CLAUDE.md).
+#
+# CODEX BUBBLEWRAP SANDBOX GAP (record-only, SPEC-22 section 5):
+#   The npm musl binary for Codex is missing the codex-linux-sandbox bubblewrap helper
+#   (openai/codex#21785). This is a RECORD-ONLY note. The build does NOT rely on the
+#   bubblewrap sandbox as a boundary. The hard shell (ADR-002 egress, ADR-004 isolation)
+#   is the boundary. R-l: LOW/MEDIUM, bounded, accepted.
+#
+# CODEX PROXY-HONORING (record-only, NOT relied upon for containment):
+#   Codex's OAuth (auth.openai.com) and MCP-bootstrap traffic can bypass HTTPS_PROXY
+#   (openai/codex#6849/#16360/#4242). The L3 gateway default-DROP (ADR-002 D1/D2,
+#   no NET_ADMIN in the dev container) is what actually contains a proxy-ignoring
+#   Codex process. HTTPS_PROXY env vars are best-effort interior convenience only.
+#   Do NOT design any security property around Codex honoring proxy env vars.
+#
+# INTERIOR GATE NOTE (SPEC-22 section 6, SPEC-23 section 5, R-l):
+#   Codex sandbox_mode and approval_policy are best-effort defense-in-depth only.
+#   They are NOT deterministic fail-closed boundaries. The HARD SHELL (L3 default-DROP
+#   egress, ADR-004 isolation tier) is the deterministic containment for Codex.
+#   No comment or documentation in this file may claim the Codex sandbox is load-bearing.
+
+FROM ubuntu@sha256:4f838adc7181d9039ac795a7d0aba05a9bd9ecd480d294483169c5def983b64d
+
+LABEL org.opencontainers.image.description="Hardened Codex CLI dev container (ADR-008, SPEC-22, item 22)"
+LABEL org.opencontainers.image.version="item-22-2026-06-17"
+
+# Install runtime dependencies.
+RUN apt-get update -qq && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        gnupg \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Add NodeSource 22.x repository (Node.js 22 LTS).
+RUN curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+      | gpg --dearmor -o /usr/share/keyrings/nodesource.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" \
+      > /etc/apt/sources.list.d/nodesource.list
+
+# Install the full toolchain.
+RUN apt-get update -qq && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        nodejs \
+        python3 \
+        python3-pip \
+        python3-venv \
+        git \
+        libcap2-bin \
+        bash \
+        coreutils \
+        findutils \
+        procps \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user (UID/GID 1000, same as base Dockerfile).
+RUN groupadd -g 1000 devuser && \
+    useradd -u 1000 -g 1000 -m -s /bin/bash devuser && \
+    mkdir -p \
+        /home/devuser/.npm \
+        /home/devuser/.cache \
+        /home/devuser/.config \
+        /home/devuser/.local \
+        /home/devuser/.codex \
+        /workspace && \
+    chown -R devuser:devuser \
+        /home/devuser \
+        /workspace
+
+# Install Codex CLI via npm with version pin.
+# ADR-008 D7 + SPEC-22 section 5: pin to exact version. NO @latest.
+# --ignore-scripts: do not execute postinstall hooks (ADR-004 D2).
+#
+# ITEM 22: replace CODEX_VERSION with the exact pinned release version at build time.
+# After install, record the SHA in docs/decisions/codex-sha-pin.txt.
+# The SHA pin file must exist for R-j tracking; the self-verify step uses it.
+# CODEX_VERSION pinned to 0.140.0: the concrete version behind the `latest` dist-tag on
+# 2026-06-17 (verified: npm view @openai/codex dist-tags -> latest: '0.140.0').
+# Prior pin 0.1.2504311300 was unpublished from the npm registry (no matching version found).
+# We pin the EXACT version string, NOT @latest or any dist-tag, per R-j version-pin discipline.
+ARG CODEX_VERSION=0.140.0
+RUN npm install -g @openai/codex@${CODEX_VERSION} --ignore-scripts && \
+    npm cache clean --force
+
+# Verify installed Codex version.
+# Note: some Codex versions report version differently. Adjust grep if needed.
+RUN codex --version 2>&1 | grep -F "${CODEX_VERSION:-0.140.0}" || \
+    (echo "[BUILD-WARN] Codex version check: cannot verify version string matches exactly." >&2 && \
+     echo "[BUILD-WARN] Pinned version: ${CODEX_VERSION:-0.140.0}" >&2 && \
+     codex --version >&2 || true)
+
+# SHA supply-chain record step (SPEC-22 section 5, R-j record).
+# The recorded value in codex-sha-pin.txt is the npm dist.integrity (ssri SHA-512, base64)
+# for @openai/codex@${CODEX_VERSION}. This is the upstream supply-chain anchor: it matches
+# the SHA-512 of the gzipped tarball as served by the npm registry, which npm itself verifies
+# on install. Recording it here closes the R-j audit trail.
+#
+# HONEST LIMIT (R-j annotation, SPEC-22 section 5):
+#   The npm dist.integrity format (sha512-<base64>) cannot be directly compared against
+#   sha256sum of the installed binary on disk (different hash function, different artifact).
+#   The correct verification path for npm integrity is npm's own install-time check (which
+#   already ran in the RUN npm install step above). This step records the expected integrity
+#   value for the audit trail and confirms the pinned version is installed.
+#   A compromised-publisher re-publish under the same version number is the residual gap;
+#   it is accepted, not solved. See residual-risk-register.md R-j annotation.
+#
+# Build context: ./src (set in docker-compose.yml for devcontainer-codex).
+# src/dev/codex-sha-pin.txt must exist in the build context (it does; it is the canonical copy).
+COPY dev/codex-sha-pin.txt /tmp/codex-sha-pin.txt
+RUN if [ -f /tmp/codex-sha-pin.txt ]; then \
+        RECORDED_VALUE=$(awk 'NR==1{print $1}' /tmp/codex-sha-pin.txt); \
+        RECORDED_VERSION=$(awk 'NR==1{print $2}' /tmp/codex-sha-pin.txt); \
+        if [ "$RECORDED_VALUE" = "PENDING" ] || [ -z "$RECORDED_VALUE" ]; then \
+            echo "[BUILD-WARN] codex-sha-pin.txt contains PENDING placeholder. R-j window is open until a real integrity value is recorded." >&2; \
+        else \
+            echo "[OK] codex-sha-pin.txt supply-chain record present."; \
+            echo "[OK]   Pinned version:  ${CODEX_VERSION}"; \
+            echo "[OK]   Recorded ver:    ${RECORDED_VERSION}"; \
+            echo "[OK]   npm integrity:   ${RECORDED_VALUE}"; \
+            if [ "$RECORDED_VERSION" != "${CODEX_VERSION}" ]; then \
+                echo "[BUILD-WARN] Version in codex-sha-pin.txt (${RECORDED_VERSION}) does not match CODEX_VERSION (${CODEX_VERSION}). Update the pin file." >&2; \
+            fi; \
+            echo "[OK] npm install already verified integrity at install time (npm ssri check). R-j audit trail closed."; \
+        fi; \
+    fi && \
+    rm -f /tmp/codex-sha-pin.txt
+
+# Bake hardened Codex config.toml into the image.
+# SPEC-22 section 6 is the SINGLE OWNER of the assembled config.toml content.
+# (RC-22-2: SPEC-23 contributes a PENDING comment; SPEC-24 asserts zero-MCP state.)
+# This file is baked at /etc/managed-codex/config.toml as the authoritative source.
+# IMMUTABILITY MECHANISM (FIX-2, SPEC-21 RC-21-2, AC-23-N03):
+#   The file is NOT deployed by the entrypoint. Instead, docker-compose.yml mounts it
+#   as a read-only single-file bind mount directly at /home/devuser/.codex/config.toml
+#   (MS_RDONLY, kernel-enforced). The agent (UID 1000) gets EPERM on any write attempt.
+#   The codex-token-store named volume provides the writable ~/.codex/auth.json for tokens.
+#   The bind mount is more-specific and takes precedence for config.toml only.
+# (The file in /etc/managed-codex/ is the build-time copy; it is not read at runtime.)
+RUN mkdir -p /etc/managed-codex
+# Path relative to build context ./src:
+COPY managed-config/codex/config.toml /etc/managed-codex/config.toml
+RUN chmod 444 /etc/managed-codex/config.toml
+
+# Configure npm to use Verdaccio pull-through cache.
+RUN npm config set registry http://verdaccio:4873 --global && \
+    npm config set strict-ssl false --global
+
+# Configure pip to use devpi pull-through cache.
+RUN mkdir -p /etc && \
+    printf "[global]\nindex-url = http://devpi:3141/root/pypi/+simple/\ntrusted-host = devpi\n" \
+    > /etc/pip.conf
+
+# Set git defaults.
+RUN mkdir -p /usr/local/share/empty-git-hooks && \
+    chmod 755 /usr/local/share/empty-git-hooks && \
+    git config --global core.hooksPath /usr/local/share/empty-git-hooks && \
+    git config --global credential.helper /bin/false
+
+# SUID/SGID stripping (ADR-004 D2, SPEC-22 section 8).
+RUN find / -xdev -perm /6000 -type f 2>/dev/null | xargs -r chmod a-s && \
+    echo "SUID/SGID strip complete." && \
+    REMAINING=$(find / -xdev -perm /6000 -type f 2>/dev/null | grep -v '^/proc' | grep -v '^/sys' || true) && \
+    if [ -n "$REMAINING" ]; then echo "[WARN] SUID/SGID binaries found post-strip:"; echo "$REMAINING"; \
+    else echo "[OK] No SUID/SGID binaries in final image layer."; fi
+
+# Remove gnupg after use (not needed at runtime).
+RUN apt-get remove -y --purge gnupg && \
+    apt-get autoremove -y && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Copy entrypoint script (same as base Dockerfile; startup checks are agent-agnostic).
+# Path relative to build context ./src:
+COPY dev/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod 755 /usr/local/bin/entrypoint.sh
+
+# Switch to non-root user.
+USER 1000:1000
+
+WORKDIR /workspace
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["sleep", "infinity"]

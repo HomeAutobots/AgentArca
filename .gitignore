@@ -1,0 +1,16 @@
+.claude/audit/
+.claude/settings.local.json
+**/.env
+**/*.pem
+**/node_modules/
+**/__pycache__/
+
+# editor vault + OS cruft
+.obsidian/
+**/.DS_Store
+
+# transient per-run test logs/summaries (keep canonical *-results.csv evidence)
+tests/*/results/run-*.log
+tests/*/results/run-profiles-*.log
+tests/*/results/summary-*.txt
+tests/*/results/summary-profiles-*.txt

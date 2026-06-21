@@ -1,0 +1,147 @@
+# docker-compose.discovery.yml  (TEMPORARY, item 08 OI-08-C empirical allowlist discovery)
+# Overlay used ONLY for the authenticated agent-workflow discovery run.
+# Run with:  docker compose -f docker-compose.yml -f docker-compose.discovery.yml --profile <agent> ...
+#
+# USAGE (per-profile, choose the profile matching the agent being discovered):
+#
+#   Copilot (default discovery target):
+#     docker compose -f docker-compose.yml -f docker-compose.discovery.yml \
+#       --profile copilot up -d
+#     docker compose -f docker-compose.yml -f docker-compose.discovery.yml \
+#       --profile copilot exec devcontainer bash
+#
+#   Claude:
+#     docker compose -f docker-compose.yml -f docker-compose.discovery.yml \
+#       --profile claude up -d
+#     docker compose -f docker-compose.yml -f docker-compose.discovery.yml \
+#       --profile claude exec devcontainer-claude bash
+#
+#   Codex:
+#     docker compose -f docker-compose.yml -f docker-compose.discovery.yml \
+#       --profile codex up -d
+#     docker compose -f docker-compose.yml -f docker-compose.discovery.yml \
+#       --profile codex exec devcontainer-codex bash
+#
+# It does two things:
+#   1. Swaps the ACTIVE profile's gateway squid.conf for the discovery variant (peek the SNI,
+#      splice ALL, block nothing) so every host the real workflow hits is observed and logged.
+#      Each per-profile gateway is patched separately (only the active profile's gateway runs).
+#   2. Adds a 'discovery' container that shares the active gateway's netns and routes all
+#      egress through the gateway proxy, where the agent tool runs.
+#
+# The production stack (docker-compose.yml alone) is unchanged and stays deny-by-default.
+# Tear this down after harvesting; the locked allowlist is built into the agent's
+# squid-allowlist.d/<agent>.conf, then the normal stack is re-validated.
+#
+# NOTE (FIX-F2 2026-06-20): The bare 'gateway' service was replaced by per-profile gateways
+# (gateway-copilot, gateway-claude, gateway-codex). This overlay patches each gateway
+# separately. Only the gateway that matches the chosen --profile flag starts.
+# The 'discovery' container uses network_mode: "service:gateway-<agent>" accordingly.
+# Since only one --profile is used at a time, at most one gateway and one discovery
+# container are active. The AGENT env var selects which network_mode to apply.
+
+services:
+
+  # ============================================================
+  # COPILOT GATEWAY: discovery mode override
+  # Active only when --profile copilot is used.
+  # Swaps squid.conf for splice-all discovery config.
+  # ============================================================
+  # NOTE: 'profiles:' is NOT redeclared here for gateway services.
+  # Compose overlay merges arrays by concatenation, so redeclaring profiles: [copilot]
+  # on top of the base's profiles: [copilot] would produce a duplicate-entry error.
+  # The base compose profiles are inherited automatically by the overlay merge.
+  gateway-copilot:
+    # Observe-everything mode: peek the SNI, splice all, log all. Nothing blocked.
+    volumes:
+      - ./src/gateway/discovery/squid-discovery.conf:/etc/squid/squid.conf:ro
+    # Production selfcheck asserts example.com is DENIED, which is false in splice-all mode.
+    # Use a liveness-only healthcheck for discovery.
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -x squid >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 30s
+
+  # ============================================================
+  # CLAUDE GATEWAY: discovery mode override
+  # Active only when --profile claude is used.
+  # ============================================================
+  gateway-claude:
+    volumes:
+      - ./src/gateway/discovery/squid-discovery.conf:/etc/squid/squid.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -x squid >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 30s
+
+  # ============================================================
+  # CODEX GATEWAY: discovery mode override
+  # Active only when --profile codex is used.
+  # ============================================================
+  gateway-codex:
+    volumes:
+      - ./src/gateway/discovery/squid-discovery.conf:/etc/squid/squid.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -x squid >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 30s
+
+  # ============================================================
+  # DISCOVERY CONTAINER (per-profile)
+  # A throwaway container that shares the active gateway's netns and routes
+  # all egress through the gateway proxy on localhost:8080. Run agent tools here
+  # to harvest every SNI the real workflow hits.
+  # Profiles match the three gateway options; only the active profile's version runs.
+  # ============================================================
+
+  discovery-copilot:
+    profiles: [copilot]
+    image: ubuntu:22.04
+    container_name: copilot-discovery
+    # Share the copilot gateway's netns: all egress goes through the proxy on localhost:8080.
+    network_mode: "service:gateway-copilot"
+    depends_on:
+      gateway-copilot:
+        condition: service_healthy
+    environment:
+      HTTP_PROXY: "http://localhost:8080"
+      HTTPS_PROXY: "http://localhost:8080"
+      NO_PROXY: "localhost,127.0.0.1"
+      DEBIAN_FRONTEND: "noninteractive"
+    command: ["sleep", "infinity"]
+
+  discovery-claude:
+    profiles: [claude]
+    image: ubuntu:22.04
+    container_name: claude-discovery
+    network_mode: "service:gateway-claude"
+    depends_on:
+      gateway-claude:
+        condition: service_healthy
+    environment:
+      HTTP_PROXY: "http://localhost:8080"
+      HTTPS_PROXY: "http://localhost:8080"
+      NO_PROXY: "localhost,127.0.0.1"
+      DEBIAN_FRONTEND: "noninteractive"
+    command: ["sleep", "infinity"]
+
+  discovery-codex:
+    profiles: [codex]
+    image: ubuntu:22.04
+    container_name: codex-discovery
+    network_mode: "service:gateway-codex"
+    depends_on:
+      gateway-codex:
+        condition: service_healthy
+    environment:
+      HTTP_PROXY: "http://localhost:8080"
+      HTTPS_PROXY: "http://localhost:8080"
+      NO_PROXY: "localhost,127.0.0.1"
+      DEBIAN_FRONTEND: "noninteractive"
+    command: ["sleep", "infinity"]

@@ -1,0 +1,200 @@
+# src/detect/docker-compose.detect.yml
+#
+# Detection and audit sink services (item 13, ADR-007 D3, SPEC-07 section 3).
+#
+# This Compose file defines the HOST-SIDE tamper-resistant sink components.
+# These run on the host Docker daemon (outside the dev container) and are NOT
+# accessible to the agent running inside the dev container.
+#
+# Services:
+#   immudb        - Append-only, cryptographically verifiable database.
+#                   The audit record. No delete path. Records are Merkle-hashed.
+#   ingest-proxy  - Write-only HTTP proxy that wraps immudb's gRPC API.
+#                   Accepts only POST /ingest; rejects GET / DELETE / PUT / PATCH.
+#                   This is what HOOK_LOG_SINK and MCP_DETECTION_SINK point at.
+#   otel-collector - OTel Collector receiving OTLP/HTTP spans on port 4318.
+#                   Receives spans from the VS Code Copilot extension.
+#                   Exports to immudb ingest (via otel-exporter) and Jaeger UI.
+#   rsyslog-sink  - rsyslog receiver for TLS-forwarded text logs (hook log,
+#                   agent debug log) from the dev container. Appends to immudb.
+#
+# Port layout (host-side only, not in the devcontainer netns):
+#   localhost:3001 - ingest-proxy HTTP (HOOK_LOG_SINK / MCP_DETECTION_SINK)
+#   localhost:3322 - immudb gRPC (admin only, not exposed to devcontainer)
+#   localhost:8082 - immudb HTTP health / admin UI (host 8080 conflicts with Docker Desktop)
+#   localhost:4318 - OTel Collector OTLP/HTTP receiver
+#   localhost:4317 - OTel Collector OTLP/gRPC receiver
+#   localhost:16686 - Jaeger UI (read-only observer, not the ingest path)
+#
+# Four non-negotiable conditions (SPEC-07 section 3):
+#   (a) HOST-SIDE: all services listen on localhost (127.0.0.1); the devcontainer
+#       reaches the ingest-proxy via host.docker.internal:3001 (Docker internal DNS).
+#       NOT an arbitrary external host.
+#   (b) WRITE-ONLY: the ingest-proxy only allows POST. GET/DELETE/PUT/PATCH -> 405.
+#   (c) SEPARATION OF DUTIES: immudb admin credentials are distinct from the
+#       ingest-proxy credentials; the agent has no immudb admin credentials.
+#   (d) OFF-HOST HOP: there is no off-host hop in this deployment. Logs stay
+#       on the host in immudb. If you add SIEM export, it must be to a destination
+#       the agent cannot reach.
+#
+# Usage:
+#   docker compose -f src/detect/docker-compose.detect.yml up -d
+#   docker compose -f src/detect/docker-compose.detect.yml down
+#
+# Retention: immudb data is in the immudb-data named volume (not a host bind mount).
+# Minimum retention per SPEC-07 section 7: 90 days. immudb's built-in Merkle-tree
+# guarantees tamper evidence (any deleted or modified record changes the tree root).
+
+services:
+
+  immudb:
+    # immudb: cryptographically verifiable append-only database.
+    # Source: https://docs.immudb.io/
+    # Pinned by digest (supply-chain integrity, ADR-004 D2 / ADR-006 D4).
+    # Digest resolved 2026-06-14: docker pull codenotary/immudb:1.9.5 && docker inspect --format='{{index .RepoDigests 0}}'
+    # To re-pin on upgrade: docker pull codenotary/immudb:<new-tag> && docker inspect --format='{{index .RepoDigests 0}}' codenotary/immudb:<new-tag>
+    image: codenotary/immudb:1.9.5@sha256:ca64fd851b3e60a43115e79f71c4830935f5652e0692628fc80a475c417743a7
+    container_name: copilot-audit-immudb
+    # immudb does not need elevated capabilities.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Only expose to localhost. The devcontainer CANNOT reach port 3322 or 8080.
+    # The ingest-proxy reaches immudb via the detect-net bridge network.
+    ports:
+      - "127.0.0.1:3322:3322"    # gRPC API (admin only)
+      - "127.0.0.1:8082:8080"    # HTTP health / UI (admin only; host 8080 may conflict with Docker Desktop)
+    # Persistent audit data (not a host bind mount; named volume for portability).
+    volumes:
+      - immudb-data:/var/lib/immudb
+    networks:
+      - detect-net
+    environment:
+      # immudb admin credentials (operator-side only; agent does not know these).
+      # OPERATOR: set IMMUDB_ADMIN_PASSWORD in a .env file (gitignored) or via
+      # a Docker secret before running `docker compose up`. There is intentionally
+      # NO committed default. Compose will fail if this variable is unset.
+      # Example: echo 'IMMUDB_ADMIN_PASSWORD=<your-strong-password>' >> src/detect/.env
+      # The .env file MUST be listed in .gitignore and never committed.
+      # This enforces SPEC-07 section 3 condition (c) separation of duties:
+      # the operator holds the admin credential; the agent has no immudb admin access.
+      IMMUDB_AUTH: "true"
+      IMMUDB_ADMIN_PASSWORD: "${IMMUDB_ADMIN_PASSWORD:?IMMUDB_ADMIN_PASSWORD must be set (see src/detect/.env.example). No default is intentional.}"
+      # Append-only mode enforced by immudb's design. No delete API.
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "immuadmin", "status"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  ingest-proxy:
+    # Write-only ingest proxy. Wraps immudb's HTTP API.
+    # Accepts POST /ingest only. Rejects GET, DELETE, PUT, PATCH with 405.
+    # Satisfies SPEC-07 section 3 condition (b).
+    # Built from src/detect/ingest-proxy/ (a small Node.js HTTP server).
+    build:
+      context: ./ingest-proxy
+      dockerfile: Dockerfile
+    container_name: copilot-audit-ingest-proxy
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Port 3001 exposed on localhost for the host-side hook log forwarder.
+    # The devcontainer reaches this via host.docker.internal:3001.
+    ports:
+      - "127.0.0.1:3001:3001"
+    environment:
+      IMMUDB_URL: "http://immudb:8080"
+      # OPERATOR: same IMMUDB_ADMIN_PASSWORD used here so the ingest-proxy can
+      # authenticate to immudb on the internal detect-net bridge. Set via .env
+      # (gitignored) alongside the immudb service above. No committed default.
+      IMMUDB_ADMIN_PASSWORD: "${IMMUDB_ADMIN_PASSWORD:?IMMUDB_ADMIN_PASSWORD must be set (see src/detect/.env.example). No default is intentional.}"
+      INGEST_PORT: "3001"
+    networks:
+      - detect-net
+    depends_on:
+      immudb:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  otel-collector:
+    # OTel Collector: receives OTLP/HTTP spans from VS Code Copilot extension.
+    # Source: https://opentelemetry.io/docs/collector/
+    # Pinned by digest (supply-chain integrity, ADR-004 D2 / ADR-006 D4).
+    # Digest resolved 2026-06-14: docker pull otel/opentelemetry-collector-contrib:0.102.0 && docker inspect --format='{{index .RepoDigests 0}}'
+    # To re-pin on upgrade: docker pull otel/opentelemetry-collector-contrib:<new-tag> && docker inspect --format='{{index .RepoDigests 0}}' otel/opentelemetry-collector-contrib:<new-tag>
+    image: otel/opentelemetry-collector-contrib:0.102.0@sha256:26bce721ca2f83db1c2c4e8873514dfe5b3973401fe88a1208efdc74e32840c1
+    container_name: copilot-audit-otel-collector
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # OTLP/HTTP on 4318, OTLP/gRPC on 4317.
+    # The VS Code extension sends to localhost:4318 (or host.docker.internal:4318
+    # from inside the devcontainer, but VS Code runs on the HOST so it reaches
+    # localhost:4318 directly).
+    ports:
+      - "127.0.0.1:4318:4318"    # OTLP/HTTP
+      - "127.0.0.1:4317:4317"    # OTLP/gRPC
+    volumes:
+      - type: bind
+        source: ./otel-collector.yaml
+        target: /etc/otel-collector/config.yaml
+        read_only: true
+    command: ["--config", "/etc/otel-collector/config.yaml"]
+    networks:
+      - detect-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:13133/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  jaeger:
+    # Jaeger: trace UI for OTel spans (read-only observer, not the ingest path).
+    # Pinned by digest (supply-chain integrity, ADR-004 D2 / ADR-006 D4).
+    # Digest resolved 2026-06-14: docker pull jaegertracing/all-in-one:1.58.0 && docker inspect --format='{{index .RepoDigests 0}}'
+    # To re-pin on upgrade: docker pull jaegertracing/all-in-one:<new-tag> && docker inspect --format='{{index .RepoDigests 0}}' jaegertracing/all-in-one:<new-tag>
+    image: jaegertracing/all-in-one:1.58.0@sha256:1f6ee90a3f487dfd5e7430aaace16a83b55251d2c5493b14c1744d29f933fedd
+    container_name: copilot-audit-jaeger
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Jaeger UI on 16686 (localhost only). Jaeger OTLP/gRPC on 4317 (collector forwards here).
+    # This is a read-only observer: it receives spans from the otel-collector,
+    # allows human viewing of spans, but the ingest path is the otel-collector -> immudb.
+    ports:
+      - "127.0.0.1:16686:16686"   # Jaeger UI
+      - "127.0.0.1:14250:14250"   # Jaeger gRPC (receives spans from collector)
+    networks:
+      - detect-net
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    restart: unless-stopped
+
+networks:
+  detect-net:
+    driver: bridge
+    # Internal only: not connected to the copilot-net (item 08 gateway network).
+    # The devcontainer reaches the ingest-proxy via host.docker.internal, NOT via
+    # this bridge network directly. Separation of duties enforced by network topology.
+    enable_ipv6: false
+
+volumes:
+  # Named volume for immudb's persistent audit data.
+  # The audit record survives container restarts and dev container rebuilds.
+  immudb-data:
+    driver: local

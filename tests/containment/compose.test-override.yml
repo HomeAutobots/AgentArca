@@ -1,0 +1,53 @@
+# tests/containment/compose.test-override.yml
+#
+# Compose override for the item-16 CONTAINMENT red-team suite.
+# Applied with: docker compose -p rt16 -f docker-compose.yml -f tests/containment/compose.test-override.yml ...
+#
+# FRAME: "ASSUME PROMPT INJECTION SUCCEEDS; prove the boundary HOLDS."
+# Every scenario simulates the injected-agent action as a UID-1000 process / synthetic
+# hook stdin / direct curl, and asserts the deterministic boundary contains it.
+#
+# PARALLEL-RUN COORDINATION (item-15 acceptance vs item-16 red-team) - FALLBACK PATH:
+#   The original plan was to remap subnets to 172.29/172.28. That is NOT possible via a
+#   compose override because compose MERGES ipam.config lists (it appends, producing two
+#   subnets per network), and the bridge driver rejects "multiple subnets". Remapping
+#   would also desync the source-ACL (the gateway image BAKES cache_src=172.30.0.0/24 and
+#   the firewall's cache-port rules at 172.31/172.30), invalidating the source-ACL test.
+#
+#   Per the item-16 coordination note's explicit fallback: "if remapping subnets breaks
+#   the source-ACL, instead keep the original subnets but use a unique project name +
+#   container_name removal and coordinate timing with item 15 by retrying on collision."
+#
+#   So this override KEEPS the production subnets (copilot-net=172.31.0.0/24,
+#   cache-net=172.30.0.0/24) which match the BAKED firewall + squid source-ACL (so the
+#   devcontainer-cannot-reach-registry-directly containment test stays VALID), and isolates
+#   from item-15 via:
+#     (a) unique project name  -> rt16 (vs acc15)
+#     (b) container_name removed -> project-prefixed names (rt16-gateway-copilot-1, ...)
+#     (c) Docker refuses two networks on the same subnet, so run-all.sh detects an
+#         in-use 172.30/172.31 subnet and waits/retries (collision-avoidance) before
+#         bringing the stack up. Two stacks cannot hold the same subnet at once.
+#   mem_limit lowered to 2g on the dev/gateway services to avoid OOM with two stacks up.
+#
+#   No patched-config bind mounts are needed: the production subnets match the baked
+#   gateway configs, so the source-ACL containment assertion is real as-shipped.
+#
+# NOTE (FIX-F2 2026-06-20): The single 'gateway' service was replaced by per-profile
+# services. The copilot red-team suite (rt16 default profile) uses gateway-copilot.
+
+services:
+  gateway-copilot:
+    container_name: ""
+    mem_limit: 2g
+
+  devcontainer:
+    container_name: ""
+    mem_limit: 2g
+
+  verdaccio:
+    container_name: ""
+    mem_limit: 512m
+
+  devpi:
+    container_name: ""
+    mem_limit: 512m

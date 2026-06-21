@@ -1,0 +1,37 @@
+# src/caches/Dockerfile.devpi
+# devpi-server pull-through PyPI cache.
+# Item 14: Pull-through caches (ADR-002 D7, Area 9).
+#
+# Uses the official Python slim image as the base (no official devpi Docker image exists).
+# devpi-server is installed from PyPI via pip.
+#
+# Base image: python:3.11-slim pinned by digest for supply-chain integrity (ADR-004 D2 / ADR-006 D4).
+# Digest resolved 2026-06-14: docker pull python:3.11-slim && docker inspect --format='{{index .RepoDigests 0}}'
+# Multi-arch manifest list digest verified 2026-06-14.
+# To re-pin on upgrade: docker pull python:3.11-slim && docker inspect --format='{{index .RepoDigests 0}}' python:3.11-slim
+FROM python:3.11-slim@sha256:ae52c5bef62a6bdd42cd1e8dffef86b9cd284bde9427da79839de7a4b983e7ca
+
+# Install devpi-server.
+# --no-cache-dir: do not keep pip's cache in the image layer.
+# devpi-server[all]: installs devpi-server with all optional dependencies.
+RUN pip install --no-cache-dir "devpi-server==6.20.2" "devpi-web==4.2.1"
+
+# Create a non-root user for running devpi.
+RUN groupadd -g 1001 devpiuser && \
+    useradd -u 1001 -g 1001 -m -s /bin/sh devpiuser
+
+# Create the data directory. At runtime this is overlaid by the named volume.
+RUN mkdir -p /devpi && chown devpiuser:devpiuser /devpi
+
+# Copy and install the entrypoint script.
+COPY devpi-entrypoint.sh /usr/local/bin/devpi-entrypoint.sh
+RUN chmod 755 /usr/local/bin/devpi-entrypoint.sh
+
+# Switch to non-root user.
+USER 1001:1001
+
+# Expose devpi-server default port.
+EXPOSE 3141
+
+# Entrypoint: initialize devpi if needed, then start the server.
+ENTRYPOINT ["/usr/local/bin/devpi-entrypoint.sh"]

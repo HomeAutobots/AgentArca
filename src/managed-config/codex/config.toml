@@ -1,0 +1,123 @@
+# ~/.codex/config.toml
+# Codex hardened config for the devcontainer profile.
+# Source of key names: developers.openai.com/codex/config-advanced (fetched 2026-06-17).
+# SPEC-22 SECTION 6 IS THE SINGLE OWNER OF THIS FILE (RC-22-2).
+#   SPEC-23 contributes the [hooks] PENDING-SCHEMA-VERIFICATION comment block below.
+#   SPEC-24 asserts the ABSENCE of [mcp_servers.*] tables (zero-state check).
+#   Neither SPEC-23 nor SPEC-24 independently writes this file.
+# The integrity manifest (SPEC-24 section 6) hashes this assembled file.
+# DO NOT MODIFY independently via SPEC-23 or SPEC-24 -- coordinate through SPEC-22.
+#
+# IMMUTABILITY MECHANISM (FIX-2, SPEC-21 RC-21-2, AC-23-N03):
+#   This file is mounted read-only via a single-file bind mount in docker-compose.yml
+#   (MS_RDONLY, kernel-enforced). The non-root agent (devuser, UID 1000) gets EPERM on
+#   any write attempt to ~/.codex/config.toml. This is NOT deployed by the entrypoint;
+#   no chattr is used. The codex-token-store named volume provides the writable
+#   ~/.codex/auth.json for token storage; the bind mount takes precedence for config.toml only.
+#   Verified by AC-23-N03: touch ~/.codex/config.toml as UID 1000 returns EPERM (exit non-zero).
+#
+# INTERIOR GATE NOTE (SPEC-23 section 5, R-l):
+#   sandbox_mode, approval_policy, and any [hooks] wiring in this file are
+#   BEST-EFFORT DEFENSE-IN-DEPTH ONLY. They are NOT the security boundary.
+#   The HARD SHELL (ADR-002 L3 default-DROP egress, ADR-004 isolation tier) is
+#   the deterministic containment for Codex. This is non-negotiable (CLAUDE.md invariant 4).
+#
+# PROXY-HONORING HONEST STATEMENT (SPEC-22 section 6, openai/codex#6849/#16360/#4242):
+#   Codex's OAuth (auth.openai.com) and MCP-bootstrap traffic can bypass HTTPS_PROXY.
+#   The L3 gateway default-DROP (ADR-002 D1/D2, no NET_ADMIN in dev container) is what
+#   actually contains a proxy-ignoring Codex process. Do NOT assume proxy env vars are
+#   sufficient containment for Codex. The proxy env vars are best-effort interior only.
+#
+# CODEX BUBBLEWRAP SANDBOX GAP (openai/codex#21785, SPEC-22 section 5, record-only):
+#   The npm musl binary for Codex is missing the codex-linux-sandbox bubblewrap helper.
+#   This is recorded here. The build does NOT rely on the bubblewrap sandbox.
+#   The hard shell is the boundary.
+
+# === CREDENTIALS STORAGE (ADR-008 D3, SPEC-21) ===
+# Force file-based token storage (required for per-profile named volume to work).
+# Source: developers.openai.com/codex/config-advanced (2026-06-17).
+# Without this, Codex may attempt to use a keychain daemon, which does not exist
+# in a headless container and will fail. "file" stores the token as a file on the
+# codex-token-store named volume at ~/.codex/auth.json (PLAINTEXT).
+# Containment is the L3 egress gateway, NOT file permissions (R-c accepted).
+cli_auth_credentials_store = "file"
+
+# === SANDBOX MODE (best-effort defense-in-depth, NOT the boundary, R-l) ===
+# workspace-write: allows reading and writing files in the workspace directory;
+# does NOT allow network access (enforced by [sandbox_workspace_write] below).
+# Source: developers.openai.com/codex/config-advanced and config-basic (2026-06-17).
+# ITEM 22 NOTE: "workspace-write" vs "read-only" -- workspace-write is the MORE
+# restrictive option that still allows the agent to perform code edits (read-only
+# would prevent writes). With [sandbox_workspace_write] network_access=false, this
+# is the tightest mode that still allows useful agent operation.
+# BEST-EFFORT: sandbox escape does not grant network access; L3 egress blocks it.
+sandbox_mode = "workspace-write"
+
+# === APPROVAL POLICY (best-effort interior gate, NOT the boundary, R-l) ===
+# Source: developers.openai.com/codex/agent-approvals-security (2026-06-17).
+# Valid values: "untrusted" | "on-request" | "never"
+#
+# DELIBERATE CHOICE: "on-request" (not "untrusted").
+# Rationale (RC-22-1, SPEC-22 section 6): "untrusted" requires human approval for
+# EVERY tool call, creating severe approval fatigue (violates CLAUDE.md invariant 2:
+# "auto-approve safe interior to kill approval fatigue"). Because the Codex interior
+# gate is explicitly NOT the security boundary (R-l: the boundary is L3 default-DROP
+# egress + ADR-004 isolation), "untrusted" vs "on-request" is a UX/fatigue tradeoff,
+# NOT a security boundary decision. "on-request" means Codex pauses for approval when
+# it judges the action risky. The deterministic containment is the hard shell.
+# ITEM 22 re-verify: confirm "on-request" exists and has expected UX in pinned version.
+approval_policy = "on-request"
+
+# === TELEMETRY DISABLE (ADR-008 D5) ===
+# OTel exporter disabled.
+# Source: developers.openai.com/codex/config-advanced (2026-06-17).
+[otel]
+exporter = "none"
+
+# Analytics disabled.
+# Source: developers.openai.com/codex/config-advanced (2026-06-17).
+[analytics]
+enabled = false
+
+# === AUTO-UPDATE DISABLE (ADR-008 D5 / D7: pin the binary) ===
+# Source: developers.openai.com/codex/config-advanced (2026-06-17).
+check_for_update_on_startup = false
+
+# === WORKSPACE WRITE SANDBOX NETWORK ACCESS ===
+# Ensure network access is OFF in workspace-write sandbox mode.
+# Source: developers.openai.com/codex/config-advanced (2026-06-17).
+# BEST-EFFORT: this is the interior Codex sandbox gate, NOT the L3 boundary.
+# If this is bypassed, the L3 gateway default-DROP still contains any network call.
+# ITEM 22: verify the exact key name [sandbox_workspace_write] and network_access
+# against the pinned Codex version.
+[sandbox_workspace_write]
+network_access = false
+
+# === HOOKS (PENDING-SCHEMA-VERIFICATION, SPEC-23 section 5) ===
+# Codex has a [hooks] section and a hooks.json PreToolUse mechanism.
+# The I/O schema is UNDER-DOCUMENTED as of 2026-06-17 (ADR-008 D4, R-l).
+# DO NOT wire a Codex hook as a deterministic boundary until the schema is verified.
+# BEST-EFFORT DEFENSE-IN-DEPTH ONLY when enabled.
+#
+# When the schema is verified, add this section as DEFENSE-IN-DEPTH ONLY:
+# [hooks]
+# allow_managed_hooks_only = true
+# pretooluse = "/workspace/.github/hooks/pretooluse-codex-adapter.sh"
+# (A codex-specific adapter script that reads Codex's actual stdin format
+#  and outputs the expected decision format.)
+#
+# ITEM 23 FUTURE WORK: once openai/codex publishes a complete hook I/O JSON schema,
+# implement and test this adapter. Label it defense-in-depth, not boundary.
+# Reference: ADR-008 D4, R-l, openai/codex issues.
+
+# === MCP SERVERS (zero default; SPEC-24 section 4 owns this assertion) ===
+# No [mcp_servers.*] tables below this line = zero MCP servers for the Codex profile.
+# DO NOT add any [mcp_servers.*] table without clearing SPEC-06 section 3 gate
+# and section 4 checklist, regenerating the MCP integrity manifest (SPEC-24 section 6),
+# and re-running the supply-chain scan (SPEC-24 section 5).
+# Zero = T12-T16 (inter-agent threats) remain out of scope per ADR-001 D4 / ADR-006.
+#
+# SPEC-24 AC-24-N03 verification:
+#   grep -E '^\[mcp_servers\.' ~/.codex/config.toml  -- must return empty on this file.
+#
+# (End of config.toml -- no [mcp_servers.*] sections below this point)

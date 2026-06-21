@@ -1,0 +1,61 @@
+# tests/acceptance/compose.acc25-codex-override.yml
+#
+# Compose override for the item-25 CODEX profile acceptance test stack.
+# Applied with: docker compose -p acc25-codex -f docker-compose.yml \
+#               -f tests/acceptance/compose.acc25-codex-override.yml --profile codex ...
+#
+# PURPOSE:
+#   (a) Remove hardcoded container_name entries (prevents collision with acc15/rt16/production).
+#   (b) Mark networks as external (pre-created with non-conflicting subnets by run-profiles.sh).
+#       Subnets: 10.26.0.0/24 (copilot-net) and 10.26.1.0/24 (cache-net).
+#       These do not conflict with:
+#         - production copilot-devcontainer-hardening_{copilot,cache}-net (172.30-31.0.0/24)
+#         - acc15 (10.15.0.0/24, 10.15.1.0/24)
+#         - acc25-claude (10.25.0.0/24, 10.25.1.0/24)
+#         - rt16 (172.28-29.0.0/24)
+#   (c) Lower mem_limit to 2g.
+#   (d) Mount Squid conf.d snippet extending cache_src ACL for 10.26.x subnet.
+#       The RFC1918-wide rule (10.0.0.0/8) in init-firewall.sh covers 10.26.x automatically.
+#
+# NOTE (FIX-F2 2026-06-20): The single 'gateway' service was replaced by per-profile
+# services. This override targets gateway-codex (the codex profile gateway).
+# The SQUID_AGENT_FRAGMENT=codex.conf is HARDCODED in the base compose service; no
+# host-shell export is needed (which was the Phase 8 defect).
+#
+# NETWORK PRE-CREATION (done by run-profiles.sh before 'up'):
+#   docker network create --driver bridge --subnet 10.26.0.0/24 acc25-codex_copilot-net
+#   docker network create --driver bridge --subnet 10.26.1.0/24 acc25-codex_cache-net
+#
+# TEARDOWN (run-profiles.sh):
+#   docker compose -p acc25-codex -f docker-compose.yml -f ... --profile codex down -v
+#   docker network rm acc25-codex_copilot-net acc25-codex_cache-net
+
+services:
+  gateway-codex:
+    container_name: ""
+    mem_limit: 2g
+    volumes:
+      - type: bind
+        source: ./tests/acceptance/fixtures/squid-test-cache-src.conf
+        target: /etc/squid/conf.d/squid-test-cache-src.conf
+        read_only: true
+
+  devcontainer-codex:
+    container_name: ""
+    mem_limit: 2g
+
+  verdaccio:
+    container_name: ""
+    mem_limit: 512m
+
+  devpi:
+    container_name: ""
+    mem_limit: 512m
+
+networks:
+  copilot-net:
+    name: acc25-codex_copilot-net
+    external: true
+  cache-net:
+    name: acc25-codex_cache-net
+    external: true

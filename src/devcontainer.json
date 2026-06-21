@@ -1,0 +1,231 @@
+{
+  // src/devcontainer.json
+  // Hardened Copilot dev container configuration (ADR-004 D2, item 09).
+  // Updated for item 10 (credential handling, ADR-003 D1):
+  //   - containerEnv nulling block (host-credential non-inheritance)
+  //   - remoteEnv nulling block (IPC socket suppression, FALLBACK-ONLY note)
+  //   - settings block expanded with verified auth-disabling keys
+  //   - chattr +i on this file wired in postCreateCommand (OI-10-E)
+  //
+  // Key structural decisions:
+  //   - Uses dockerComposeFile + service (NOT runArgs; runArgs is IGNORED under
+  //     docker-compose, ADR-004 D2 mechanics constraint).
+  //   - Points at the top-level docker-compose.yml (the gateway sidecar is wired
+  //     there; devcontainer must reference the same compose file, not a separate one).
+  //   - Does NOT include the full approval surface (managed policy, terminal allowlist,
+  //     PreToolUse hook) - that is item 11's domain (SPEC-05).
+  //
+  // Scope boundary (item 09 vs item 10 vs item 11):
+  //   item 09 (structural):  dockerComposeFile wiring, service name, basic auto-exec
+  //                           neutralization (task.allowAutomaticTasks, core.hooksPath).
+  //   item 10 (this update): containerEnv/remoteEnv credential nulling block,
+  //                           settings auth-disable keys, devcontainer.json chattr +i.
+  //   item 11:               Managed policy settings (chat.* keys), PreToolUse hook,
+  //                           terminal auto-approve allowlist, full boundary-config
+  //                           immutability set.
+  //
+  // ADR-003 D2 headless default: this devcontainer.json targets the headless Copilot CLI
+  // model. There is NO VS Code server running inside the container as the default.
+  // The remoteEnv nulling is defense-in-depth for the VS Code FALLBACK model only.
+  // Under the headless default the VSCODE_IPC_HOOK_CLI and vscode-*.sock do NOT EXIST,
+  // so the remoteEnv block is a structural no-op in the headless default.
+  //
+  // OI-09-G (clone-into-volume): the workspace is a named Docker volume (agent-workspace),
+  // not a host bind mount. Blast radius = "delete the volume and start over."
+  // To use this container:
+  //   1. In VS Code: F1 -> "Dev Containers: Clone Repository in Named Container Volume"
+  //   2. Or: docker compose up && docker exec -it copilot-devcontainer bash
+
+  // Reference the top-level compose file (gateway + devcontainer together).
+  // Path is relative to this devcontainer.json file.
+  "dockerComposeFile": "../docker-compose.yml",
+  "service": "devcontainer",
+
+  // The workspace folder inside the container.
+  // Must match the named volume mount point in docker-compose.yml.
+  "workspaceFolder": "/workspace",
+
+  // Override command: keep the container alive (the Dockerfile CMD does this,
+  // but devcontainer.json's overrideCommand: false means use the Dockerfile CMD).
+  "overrideCommand": false,
+
+  // Shutdown action: stop the whole compose stack (gateway + devcontainer).
+  "shutdownAction": "stopCompose",
+
+  // ---------------------------------------------------------------------------
+  // Item 10: Host-credential non-inheritance (ADR-003 D1).
+  //
+  // These vars null the VS Code Dev Containers default credential-forwarding set.
+  // Re-verified 2026-06-14: VS Code Dev Containers forwards SSH_AUTH_SOCK, GIT_ASKPASS,
+  // VSCODE_GIT_ASKPASS_*, GH_TOKEN, GITHUB_TOKEN, BROWSER, GPG_AGENT_INFO by default.
+  // Official docs verbatim: "The extension will automatically copy your local .gitconfig
+  // file into the container on startup" and "Credentials you've entered locally will be
+  // reused in the container." We null all of these.
+  //
+  // GH_TOKEN / GITHUB_TOKEN nulling and Copilot CLI auth:
+  // Nulling these does NOT break the Copilot CLI. The @github/copilot CLI authenticates
+  // via its own `copilot login` device flow, storing the resulting OAuth token in
+  // ~/.copilot/ (a named volume, agent-home). It does NOT rely on an inherited
+  // GH_TOKEN/GITHUB_TOKEN env var. This is the ADR-003 D3 CLI path. Nulling the host
+  // forwarding vars removes host credentials from the container env without affecting
+  // the CLI's own auth mechanism. This is correct and intentional per ADR-003 D1.
+  // See: src/dev/copilot-token-exposure-finding.md for the R-c analysis.
+  //
+  // git credential.helper forced to /bin/false:
+  // GIT_CONFIG_COUNT/KEY_0/VALUE_0 is an env-var-driven git config mechanism that
+  // forces credential.helper=/bin/false for the duration of the container environment.
+  // /bin/false exits with code 1 on any invocation. A git push to an HTTPS remote
+  // that calls the credential helper will get non-zero from /bin/false and fail with
+  // "Authentication failed" - which is the desired outcome (AC-10-P04, AC-10-P05).
+  // ---------------------------------------------------------------------------
+  "containerEnv": {
+    // SSH agent forwarding: null the socket path so no host SSH key is accessible.
+    "SSH_AUTH_SOCK": "",
+    // Git credential brokering via VS Code UI: disable.
+    "GIT_ASKPASS": "",
+    "VSCODE_GIT_ASKPASS_MAIN": "",
+    "VSCODE_GIT_ASKPASS_NODE": "",
+    "VSCODE_GIT_ASKPASS_EXTRA_ARGS": "",
+    // GitHub token forwarding: null both forms. Does NOT affect Copilot CLI auth
+    // (CLI uses its own device-flow token in ~/.copilot/, not these env vars).
+    "GH_TOKEN": "",
+    "GITHUB_TOKEN": "",
+    // Browser forwarding: prevents host browser callbacks.
+    "BROWSER": "",
+    // GPG agent forwarding: null to prevent host pinentry access.
+    "GPG_AGENT_INFO": "",
+    // Force git credential.helper to /bin/false via git env-var config mechanism.
+    // This overrides any ~/.gitconfig or /etc/gitconfig credential helper setting.
+    // /bin/false returns exit code 1 on any invocation; git treats this as
+    // "no credentials available" and fails the authentication attempt (AC-10-P04/P05).
+    "GIT_CONFIG_COUNT": "1",
+    "GIT_CONFIG_KEY_0": "credential.helper",
+    "GIT_CONFIG_VALUE_0": "/bin/false"
+  },
+
+  // ---------------------------------------------------------------------------
+  // Item 10: IPC socket suppression (ADR-003 D1 remoteEnv, FALLBACK-ONLY).
+  //
+  // These vars null the VS Code IPC channel vars that VS Code re-injects when
+  // spawning processes after remoteEnv is applied (Area 3 verified: "despite
+  // remoteEnv clearing them, echo $VSCODE_IPC_HOOK_CLI still returns a live
+  // socket path"). So remoteEnv-nulling ALONE IS INSUFFICIENT for the VS Code
+  // fallback model; .bashrc-hardening.sh adds defense-in-depth.
+  //
+  // HEADLESS DEFAULT: Under ADR-003 D2 (the headless default), there is NO VS Code
+  // server inside the container. The IPC sockets (VSCODE_IPC_HOOK_CLI, vscode-*.sock)
+  // DO NOT EXIST in the headless model. This remoteEnv block is a structural no-op
+  // under the headless default and is defense-in-depth for the VS Code FALLBACK model.
+  // OI-10-D finding: printenv VSCODE_IPC_HOOK_CLI is empty in the headless container;
+  // no vscode-*.sock files exist in /tmp. Confirmed 2026-06-14. See STATE.md item 10.
+  // ---------------------------------------------------------------------------
+  "remoteEnv": {
+    // VS Code IPC channel: the vector for the VSCODE_IPC_HOOK_CLI + TerminalService
+    // container-escape (Area 3, Red Guild demo). Null here; .bashrc-hardening.sh
+    // re-clears in shell for defense-in-depth (FALLBACK model only).
+    "VSCODE_IPC_HOOK_CLI": null,
+    // Git IPC handle: used for VS Code's git extension IPC channel.
+    "VSCODE_GIT_IPC_HANDLE": null,
+    // Dev Containers IPC: used for host-container management channel.
+    "REMOTE_CONTAINERS_IPC": null,
+    // Dev Containers socket list: forwarded socket paths.
+    "REMOTE_CONTAINERS_SOCKETS": null,
+    // Dev Containers display socket: for X11/Wayland forwarding (defense-in-depth).
+    "REMOTE_CONTAINERS_DISPLAY_SOCK": null
+  },
+
+  // ---------------------------------------------------------------------------
+  // Settings: VS Code workspace settings for the container.
+  // Item 09 contributed the structural/auto-exec-neutralization keys.
+  // Item 10 adds the auth-disabling keys (verified 2026-06-14).
+  // Item 11 will add the managed approval surface (chat.* keys, terminal allowlist).
+  //
+  // Key verification status (2026-06-14):
+  //   git.githubAuthentication: VERIFIED (microsoft/vscode #96280, #97320).
+  //     Correct key. ADR-003 research had the wrong form (github.gitAuthentication).
+  //   git.terminalAuthentication: VERIFIED (microsoft/vscode #97320).
+  //   github.copilot.auth.permissions: NOT CONFIRMED. Searched VS Code docs,
+  //     enterprise AI settings page, and VS Code 1.124 release notes 2026-06-14.
+  //     The key does NOT appear in official docs. The enterprise policy list
+  //     (code.visualstudio.com/docs/enterprise/ai-settings) has no such key.
+  //     A community reference to github.copilot.advanced.authPermissions is
+  //     also unconfirmed (no official docs). NOT asserted per ADR-003 D3 and
+  //     per the BUILD_PLAN item 10 instruction. See:
+  //     src/dev/copilot-auth-permissions-finding.md for the full finding.
+  // ---------------------------------------------------------------------------
+  "settings": {
+    // -------------------------------------------------------------------------
+    // Auto-exec neutralization (item 09, kept from base).
+    // -------------------------------------------------------------------------
+    // Neutralize auto-tasks (VS Code tasks.json auto-execution).
+    "task.allowAutomaticTasks": "off",
+
+    // Set git hooks path to an empty directory.
+    "git.path": "git",
+    "git.ignoreMissingGitWarning": true,
+
+    // -------------------------------------------------------------------------
+    // Item 10: Git authentication disabling (ADR-003 D1).
+    // VERIFIED key names, 2026-06-14.
+    // -------------------------------------------------------------------------
+    // Disable VS Code's GitHub authentication integration for git operations.
+    // This prevents VS Code from using the host's GitHub.com OAuth session to
+    // authenticate git push/pull operations inside the container.
+    // VERIFIED key: git.githubAuthentication (NOT github.gitAuthentication -
+    // that was the research's wrong form; corrected in ADR-003 verification note).
+    "git.githubAuthentication": false,
+
+    // Disable VS Code's terminal-based git authentication (the GIT_ASKPASS flow
+    // that opens a credential prompt in the VS Code terminal).
+    // VERIFIED key: git.terminalAuthentication.
+    // Note: takes effect on terminal restart (per ADR-003 verification note).
+    "git.terminalAuthentication": false,
+
+    // -------------------------------------------------------------------------
+    // INTENTIONALLY NOT SET: github.copilot.auth.permissions
+    // This key was carried from research as "pending-verification" (ADR-003 D3).
+    // OI-10-B finding (2026-06-14): the key cannot be confirmed in official VS Code
+    // docs, VS Code 1.124 release notes, or the enterprise AI settings page.
+    // A community discussion referenced "github.copilot.advanced.authPermissions"
+    // but this is also unconfirmed. The key is NOT asserted here.
+    // The committed token minimization mechanism is the CLI fine-grained-PAT path
+    // (VERIFIED, ADR-003 D3): a PAT with the "Copilot Requests" permission scoped
+    // to a single repository, supplied via COPILOT_GITHUB_TOKEN/GH_TOKEN/GITHUB_TOKEN.
+    // See: src/dev/copilot-auth-permissions-finding.md
+    // -------------------------------------------------------------------------
+
+    // Disable VS Code workspace trust prompts.
+    "security.workspace.trust.enabled": false,
+    "security.workspace.trust.startupPrompt": "never",
+
+    // Telemetry: off inside the container.
+    "telemetry.telemetryLevel": "off"
+  },
+
+  // VS Code extensions to install inside the container.
+  // Minimal set: Python + Node.js language support only.
+  // Item 11 (SPEC-05) adds the Copilot extension and approval-related configuration.
+  "extensions": [
+    "ms-python.python",
+    "dbaeumer.vscode-eslint"
+  ],
+
+  // Post-create command: set up git hooks, credential.helper, and chattr +i.
+  // Item 10 adds: chattr +i on the workspace copy of devcontainer.json (OI-10-E).
+  // The workspace copy is at /workspace/.devcontainer/devcontainer.json (if the repo
+  // is cloned into the volume with the standard .devcontainer/ layout).
+  // chattr +i prevents an injected agent from editing its own boundary config to
+  // re-add host mounts or an initializeCommand (which would run on the HOST at rebuild).
+  // CAVEAT: chattr +i may silently no-op on overlay2 (common Docker storage driver).
+  // The named volumes (agent-workspace, agent-home) use the local driver which is
+  // ext4 in LinuxKit (Docker Desktop macOS) - chattr +i SHOULD work on ext4.
+  // The result is recorded in AC-10-P06 / OI-10-E. If it no-ops, that is recorded
+  // as an accepted storage-driver gap, not silently passed.
+  "postCreateCommand": "git config --global core.hooksPath /usr/local/share/empty-git-hooks && git config --global credential.helper /bin/false && echo 'Dev container ready.' && if [ -f /workspace/.devcontainer/devcontainer.json ]; then chattr +i /workspace/.devcontainer/devcontainer.json 2>/dev/null && echo 'chattr +i applied to workspace devcontainer.json' || echo 'chattr +i failed on workspace devcontainer.json (storage-driver gap, recorded as accepted gap per OI-10-E)'; fi",
+
+  // Remote user: devuser (UID 1000, as set in the Dockerfile and compose user: 1000:1000).
+  "remoteUser": "devuser",
+
+  // Features: none by default (each feature expands attack surface).
+  "features": {}
+}

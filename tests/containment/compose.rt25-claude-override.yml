@@ -1,0 +1,49 @@
+# tests/containment/compose.rt25-claude-override.yml
+#
+# Compose override for the item-25 CLAUDE profile CONTAINMENT red-team stack (rt25).
+# Applied with: docker compose -p rt25-claude -f docker-compose.yml \
+#               -f tests/containment/compose.rt25-claude-override.yml --profile claude ...
+#
+# FRAME: "ASSUME PROMPT INJECTION SUCCEEDS; prove the boundary HOLDS."
+#
+# Distinct project name (rt25-claude) + distinct subnets keep this from colliding with
+# acc25-claude (10.25.x), acc15 (10.15.x), rt16 (172.28-29.x / 172.30-31.x), or production.
+#   rt25-claude_copilot-net: 10.45.0.0/24
+#   rt25-claude_cache-net:   10.45.1.0/24
+# Networks are pre-created external by rt25-run-profiles.sh (mirrors the test-engineer's
+# acc25 pattern). The init-firewall RFC1918-wide cache-port rules + the squid cache_src
+# test extension (squid-test-cache-src.conf) cover 10.45.x so the source-ACL test stays valid.
+#
+# NOTE (FIX-F2 2026-06-20): The single 'gateway' service was replaced by per-profile
+# services. This override targets gateway-claude. SQUID_AGENT_FRAGMENT=claude.conf is
+# HARDCODED in the base compose service (no host-shell export needed).
+
+services:
+  gateway-claude:
+    container_name: ""
+    mem_limit: 2g
+    volumes:
+      - type: bind
+        source: ./tests/acceptance/fixtures/squid-test-cache-src.conf
+        target: /etc/squid/conf.d/squid-test-cache-src.conf
+        read_only: true
+
+  devcontainer-claude:
+    container_name: ""
+    mem_limit: 2g
+
+  verdaccio:
+    container_name: ""
+    mem_limit: 512m
+
+  devpi:
+    container_name: ""
+    mem_limit: 512m
+
+networks:
+  copilot-net:
+    name: rt25-claude_copilot-net
+    external: true
+  cache-net:
+    name: rt25-claude_cache-net
+    external: true

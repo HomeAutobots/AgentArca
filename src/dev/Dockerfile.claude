@@ -1,0 +1,186 @@
+# src/dev/Dockerfile.claude
+# Hardened Claude Code dev container (ADR-008 D1/D5/D7, SPEC-22 section 3).
+#
+# Extends the base dev container image build with Claude Code installation.
+# All isolation baseline from item 09 / ADR-004 is INHERITED unchanged:
+#   - Non-root user 1000:1000 (devuser)
+#   - cap_drop/no-new-privileges/read_only/seccomp set in docker-compose.yml
+#   - Named volumes for workspace and per-profile token store
+#
+# Claude Code install: npm @anthropic-ai/claude-code@{VERSION} with version pin.
+# Manifest GPG verification: carried-pending-build-verification (ADR-008 D7).
+# See SPEC-22 section 3 for the full verification procedure.
+#
+# SUPPLY-CHAIN NOTE (ADR-008 D7, SPEC-22 section 3):
+#   Claude Code SHOULD be verified via the signed manifest.json (SHA256 + GPG).
+#   This Dockerfile pins the version and verifies it. The GPG manifest step is
+#   CARRIED-PENDING-LIVE-VERIFICATION: the manifest URL and JSON field structure
+#   must be confirmed empirically against the pinned version. See SPEC-22 section 3.
+#   If the manifest download fails, the build MUST fail (not silently skip verification).
+#
+# PROXY NOTE (SPEC-22 section 4):
+#   The spec documents "HTTPS_PROXY: http://gateway:3128" in settings.json.
+#   RUNTIME FINDING: the actual Squid gateway port is 8080 (not 3128), and because
+#   the devcontainer shares the gateway's network namespace, the correct value is
+#   http://localhost:8080. This is consistent with the existing copilot profile.
+#   The settings.json is deployed with http://localhost:8080.
+#   The discrepancy from the spec (gateway:3128) is recorded here as a spec note.
+#   The spec says "Item 22 MUST verify the actual service name and port" -- verified.
+
+FROM ubuntu@sha256:4f838adc7181d9039ac795a7d0aba05a9bd9ecd480d294483169c5def983b64d
+
+LABEL org.opencontainers.image.description="Hardened Claude Code dev container (ADR-008, SPEC-22, item 22)"
+LABEL org.opencontainers.image.version="item-22-2026-06-17"
+
+# Install runtime dependencies (same as base Dockerfile, required for this image).
+# claude-code requires Node.js 18+ (18+ confirmed; 22 LTS preferred).
+# gnupg: for Claude manifest GPG verification (removed after verification).
+RUN apt-get update -qq && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        gnupg \
+        jq \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Add NodeSource 22.x repository (Node.js 22 LTS).
+RUN curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+      | gpg --dearmor -o /usr/share/keyrings/nodesource.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" \
+      > /etc/apt/sources.list.d/nodesource.list
+
+# Install the full toolchain.
+RUN apt-get update -qq && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        nodejs \
+        python3 \
+        python3-pip \
+        python3-venv \
+        git \
+        libcap2-bin \
+        bash \
+        coreutils \
+        findutils \
+        procps \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user (UID/GID 1000, same as base Dockerfile).
+RUN groupadd -g 1000 devuser && \
+    useradd -u 1000 -g 1000 -m -s /bin/bash devuser && \
+    mkdir -p \
+        /home/devuser/.npm \
+        /home/devuser/.cache \
+        /home/devuser/.config \
+        /home/devuser/.local \
+        /home/devuser/.claude \
+        /workspace && \
+    chown -R devuser:devuser \
+        /home/devuser \
+        /workspace
+
+# Install Claude Code via npm with version pin.
+# ADR-008 D7 + SPEC-22 section 3: pin to exact version.
+# --ignore-scripts: do not execute postinstall hooks (ADR-004 D2).
+#
+# Version: 2.1.89 is the MINIMUM version with signed manifest support per ADR-008 D7.
+# ITEM 22: pin to the exact latest pinned release at build time; 2.1.89 is the floor.
+ARG CLAUDE_VERSION=2.1.89
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_VERSION} --ignore-scripts && \
+    npm cache clean --force
+
+# Verify installed Claude Code version.
+# The version must match exactly; build fails if not.
+RUN claude --version 2>&1 | grep -F "${CLAUDE_VERSION:-2.1.89}" || \
+    (echo "[BUILD-FAIL] Claude Code version mismatch or claude binary not found" >&2 && exit 1)
+
+# SUPPLY-CHAIN: GPG manifest verification (SPEC-22 section 3).
+# CARRIED-PENDING-LIVE-VERIFICATION:
+#   The manifest.json URL format and JSON field structure below are from ADR-008 D7
+#   research (2026-06-17). The GPG key fingerprint and exact manifest.json URL
+#   MUST be confirmed against the pinned version before this block is enabled.
+#
+# IMPORTANT: This block is commented out during initial build because:
+#   1. The exact manifest.json URL path may differ from the documented format.
+#   2. The GPG keyserver access requires network egress during build.
+#   3. The manifest JSON field structure needs live verification.
+#   When unblocked: remove the comment wrappers and run a build with network access.
+#
+# ENABLE THIS BLOCK after live verification (SPEC-22 AC-22-P03 requirement):
+# ARG CLAUDE_MANIFEST_VERIFY=false
+# RUN if [ "${CLAUDE_MANIFEST_VERIFY}" = "true" ]; then \
+#     PLATFORM="linux-x64" && \
+#     MANIFEST_URL="https://downloads.claude.ai/releases/${CLAUDE_VERSION}/manifest.json" && \
+#     MANIFEST_SIG_URL="${MANIFEST_URL}.sig" && \
+#     curl -fsSL "$MANIFEST_URL" -o /tmp/claude-manifest.json && \
+#     curl -fsSL "$MANIFEST_SIG_URL" -o /tmp/claude-manifest.json.sig && \
+#     GPG_KEY_ID="31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE" && \
+#     gpg --keyserver hkps://keys.openpgp.org --recv-keys "$GPG_KEY_ID" && \
+#     gpg --verify /tmp/claude-manifest.json.sig /tmp/claude-manifest.json && \
+#     EXPECTED_SHA=$(jq -r ".platforms.\"${PLATFORM}\".sha256" /tmp/claude-manifest.json) && \
+#     INSTALLED_BINARY=$(which claude) && \
+#     ACTUAL_SHA=$(sha256sum "$INSTALLED_BINARY" | awk '{print $1}') && \
+#     if [ "$EXPECTED_SHA" != "$ACTUAL_SHA" ]; then \
+#         echo "[FAIL] Claude Code binary SHA256 mismatch: expected=${EXPECTED_SHA} actual=${ACTUAL_SHA}" >&2 && exit 1; \
+#     fi && \
+#     echo "[OK] Claude Code binary verified: ${ACTUAL_SHA}" && \
+#     rm -f /tmp/claude-manifest.json /tmp/claude-manifest.json.sig; \
+# fi
+
+# Bake hardened Claude Code settings.json into the image.
+# SPEC-22 section 4 + SPEC-23 hooks block + SPEC-24 MCP zero-config.
+# This file is baked at /etc/managed-claude/settings.json as the authoritative source.
+# IMMUTABILITY MECHANISM (FIX-2, SPEC-21 RC-21-2):
+#   The file is NOT deployed by the entrypoint. Instead, docker-compose.yml mounts it
+#   as a read-only single-file bind mount directly at /home/devuser/.claude/settings.json
+#   (MS_RDONLY, kernel-enforced). The agent (UID 1000) gets EPERM on any write attempt.
+#   The claude-token-store named volume provides the writable ~/.claude/.credentials.json
+#   for auth. The bind mount is more-specific and takes precedence for settings.json only.
+# (The file in /etc/managed-claude/ is the build-time copy; it is not read at runtime.)
+RUN mkdir -p /etc/managed-claude
+# Path relative to build context ./src (not ./src/dev):
+COPY managed-config/claude/settings.json /etc/managed-claude/settings.json
+RUN chmod 444 /etc/managed-claude/settings.json
+
+# Configure npm to use Verdaccio pull-through cache (same as base Dockerfile).
+RUN npm config set registry http://verdaccio:4873 --global && \
+    npm config set strict-ssl false --global
+
+# Configure pip to use devpi pull-through cache (same as base Dockerfile).
+RUN mkdir -p /etc && \
+    printf "[global]\nindex-url = http://devpi:3141/root/pypi/+simple/\ntrusted-host = devpi\n" \
+    > /etc/pip.conf
+
+# Set git defaults (same as base Dockerfile).
+RUN mkdir -p /usr/local/share/empty-git-hooks && \
+    chmod 755 /usr/local/share/empty-git-hooks && \
+    git config --global core.hooksPath /usr/local/share/empty-git-hooks && \
+    git config --global credential.helper /bin/false
+
+# SUID/SGID stripping (ADR-004 D2, SPEC-22 section 8).
+# Runs after all package and npm installs to catch any newly added SUID binaries.
+RUN find / -xdev -perm /6000 -type f 2>/dev/null | xargs -r chmod a-s && \
+    echo "SUID/SGID strip complete." && \
+    REMAINING=$(find / -xdev -perm /6000 -type f 2>/dev/null | grep -v '^/proc' | grep -v '^/sys' || true) && \
+    if [ -n "$REMAINING" ]; then echo "[WARN] SUID/SGID binaries found post-strip:"; echo "$REMAINING"; \
+    else echo "[OK] No SUID/SGID binaries in final image layer."; fi
+
+# Remove gnupg after use (not needed at runtime).
+RUN apt-get remove -y --purge gnupg jq && \
+    apt-get autoremove -y && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Copy entrypoint script (same as base Dockerfile; startup checks are agent-agnostic).
+# Path relative to build context ./src:
+COPY dev/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod 755 /usr/local/bin/entrypoint.sh
+
+# Switch to non-root user.
+USER 1000:1000
+
+WORKDIR /workspace
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["sleep", "infinity"]

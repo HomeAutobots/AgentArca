@@ -1,0 +1,11 @@
+{
+  "// .mcp.json": "Claude Code project-level MCP server list. Shipped empty (zero-MCP default).",
+  "// Source:": "ADR-008 D5; code.claude.com/docs/en/mcp (re-verify schema against pinned version).",
+  "// SPEC-24 section 3a:": "This file is in the SPEC-05 boundary-config immutable set via the **/mcp.json hard-deny edits glob.",
+  "// IMMUTABILITY:": "Mounted read-only at /workspace/.mcp.json (single-file read-only bind mount, MS_RDONLY); the agent gets EROFS on write. No chattr is used. Also excluded from agent edits via the SPEC-05 edits-deny glob.",
+  "// Schema note:": "Claude Code uses 'mcpServers' (not 'servers' as in the VS Code Copilot mcp.json). Different schema.",
+  "// DO NOT add servers without clearing SPEC-06 section 3 gate and section 4 checklist.": "",
+  "// SHA-256 of this file MUST be recorded in the multi-agent MCP integrity manifest (SPEC-24 section 6).": "",
+
+  "mcpServers": {}
+}

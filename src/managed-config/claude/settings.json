@@ -1,0 +1,73 @@
+{
+  "// ~/.claude/settings.json": "Claude Code hardened config for the devcontainer profile.",
+  "// Sources:": "SPEC-22 section 4 (telemetry/proxy/permissions) + SPEC-23 hooks block + SPEC-24 MCP zero-config.",
+  "// Key names from:": "code.claude.com/docs/en/settings (fetched 2026-06-17).",
+  "// IMMUTABILITY:": "Read-only single-file bind mount (docker-compose.yml MS_RDONLY). Agent (UID 1000) gets EPERM on write. No entrypoint deploy; no chattr required. (FIX-2, SPEC-21 RC-21-2)",
+  "// DO NOT MODIFY without re-running the build gate (pretooluse.sh --self-test).": "",
+  "//": "",
+  "// SPEC-22 section 4 / SPEC-24 section 3c env block.": "",
+  "// All keys verified against code.claude.com/docs/en/settings (2026-06-17).": "",
+  "// PROXY NOTE: spec documented gateway:3128; actual Squid port is 8080.": "",
+  "// Because the devcontainer shares the gateway netns, proxy is localhost:8080.": "",
+  "// Verified 2026-06-17 against squid.conf (http_port 8080) and compose env vars.": "",
+
+  "env": {
+    "DISABLE_TELEMETRY": "1",
+    "DISABLE_ERROR_REPORTING": "1",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "DISABLE_AUTOUPDATER": "1",
+    "HTTPS_PROXY": "http://localhost:8080",
+    "HTTP_PROXY": "http://localhost:8080",
+    "NO_PROXY": "localhost,127.0.0.1,verdaccio,devpi",
+    "ENABLE_CLAUDEAI_MCP_SERVERS": "false"
+  },
+
+  "skipWebFetchPreflight": true,
+
+  "// SPEC-22 section 4 permissions block.": "",
+  "// These are soft-interior deny entries. The deterministic boundary is the PreToolUse hook (SPEC-23).": "",
+  "permissions": {
+    "deny": [
+      "Bash(curl *)",
+      "Bash(wget *)",
+      "Bash(nc *)",
+      "Bash(ssh *)"
+    ]
+  },
+
+  "// SPEC-23 section 3: hook wiring block.": "",
+  "// Wires the existing pretooluse.sh (item 11 / SPEC-05) to Claude Code's PreToolUse event.": "",
+  "// Source: code.claude.com/docs/en/hooks (fetched 2026-06-17).": "",
+  "// matcher: .* matches ALL tools (fail-closed; hook decides per tool name).": "",
+  "// type: command runs a local script (no allowlisted URL required).": "",
+  "// timeout: 10 seconds (hook must complete within this window).": "",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/workspace/.github/hooks/pretooluse.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+
+  "// SPEC-24 section 3b: user-level MCP server list. Must be empty.": "",
+  "// Source: code.claude.com/docs/en/settings (2026-06-17).": "",
+  "mcpServers": {},
+
+  "// SPEC-24 section 3d: managed zero-server enforcement.": "",
+  "// Source: code.claude.com/docs/en/settings (2026-06-17).": "",
+  "// allowedMcpServers: [] = managed allowlist is empty.": "",
+  "// allowManagedMcpServersOnly: true = only servers in managed allowlist can be used.": "",
+  "// allowAllClaudeAiMcps: false = claude.ai web UI connectors disabled.": "",
+  "// enabledMcpjsonServers: [] = no workspace .mcp.json servers enabled.": "",
+  "allowedMcpServers": [],
+  "allowManagedMcpServersOnly": true,
+  "allowAllClaudeAiMcps": false,
+  "enabledMcpjsonServers": []
+}

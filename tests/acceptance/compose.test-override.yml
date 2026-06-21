@@ -1,0 +1,64 @@
+# tests/acceptance/compose.test-override.yml
+#
+# Compose override for the item-15 acceptance suite.
+# Applied with: docker compose -p acc15 -f docker-compose.yml -f tests/acceptance/compose.test-override.yml ...
+#
+# PURPOSE:
+#   (a) Remove hardcoded container_name entries (prevents collision with item-16).
+#   (b) Mark networks as external (pre-created with desired non-conflicting subnets).
+#       This avoids the Docker Compose IPAM merge bug (bridge driver rejects
+#       dual-subnet config created by merging two ipam.config arrays).
+#   (c) Lower mem_limit to 2g to avoid OOM with two stacks running concurrently.
+#   (d) Mount Squid conf.d snippet extending cache_src ACL for test subnet.
+#
+# NETWORK SETUP (run once before this override; see run-all.sh which does this):
+#   docker network create --driver bridge --subnet 10.15.0.0/24 acc15_copilot-net
+#   docker network create --driver bridge --subnet 10.15.1.0/24 acc15_cache-net
+#
+# SUBNET ALLOCATION:
+#   acc15_copilot-net: 10.15.0.0/24  (item-15; distinct from item-16's 172.31.0.0/24)
+#   acc15_cache-net:   10.15.1.0/24  (item-15; distinct from item-16's 172.30.0.0/24)
+#
+# The init-firewall.sh RFC1918-wide rules (10.0.0.0/8 accepted for cache ports)
+# mean the 10.15.x.x subnets work without any firewall change.
+# The squid-test-cache-src.conf snippet extends Squid's cache_src ACL to 10.15.1.0/24.
+#
+# NOTE (FIX-F2 2026-06-20): The single 'gateway' service was replaced by per-profile
+# services (gateway-copilot, gateway-claude, gateway-codex). This override targets
+# gateway-copilot (the copilot acceptance suite uses the copilot profile).
+#
+# TEARDOWN (run-all.sh does this automatically):
+#   docker compose -p acc15 -f docker-compose.yml -f tests/acceptance/compose.test-override.yml down -v
+#   docker network rm acc15_copilot-net acc15_cache-net
+
+services:
+  gateway-copilot:
+    container_name: ""
+    mem_limit: 2g
+    volumes:
+      - type: bind
+        source: ./tests/acceptance/fixtures/squid-test-cache-src.conf
+        target: /etc/squid/conf.d/squid-test-cache-src.conf
+        read_only: true
+
+  devcontainer:
+    container_name: ""
+    mem_limit: 2g
+
+  verdaccio:
+    container_name: ""
+    mem_limit: 512m
+
+  devpi:
+    container_name: ""
+    mem_limit: 512m
+
+# Mark networks as external: Compose will attach to the pre-created networks
+# rather than trying to create them (and thus bypasses the IPAM merge issue).
+networks:
+  copilot-net:
+    name: acc15_copilot-net
+    external: true
+  cache-net:
+    name: acc15_cache-net
+    external: true

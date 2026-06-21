@@ -1,0 +1,120 @@
+# src/detect/otel-collector.yaml
+# OTel Collector configuration for the Copilot detection sink.
+# Item 13, ADR-007 D8, SPEC-07 section 2b + section 10-C.
+#
+# Architecture:
+#   VS Code Copilot extension -> OTLP/HTTP (port 4318) -> this collector
+#   -> (a) logging exporter (stdout, captured by Docker log driver)
+#   -> (b) OTLP/gRPC -> Jaeger (for human trace viewing)
+#   -> (c) file exporter (append-only JSONL on the host volume)
+#
+# VS Code settings that send spans here (SPEC-07 section 2b, ADR-007 D8):
+#   "github.copilot.chat.otel.enabled": true
+#   "github.copilot.chat.otel.otlpEndpoint": "http://localhost:4318"
+#   "github.copilot.chat.otel.captureContent": false    <- MUST stay false (secrets-in-logs)
+#   "github.copilot.chat.otel.dbSpanExporter.enabled": false  <- NOT the trustworthy sink
+#   "github.copilot.chat.agentDebugLog.fileLogging.enabled": true
+#
+# Attributes verified against OTel SemConv v1.41.0 (Development/experimental, 2026-06-14):
+#   gen_ai.tool.name, gen_ai.tool.type, gen_ai.tool.call.id
+#   gen_ai.tool.call.arguments, gen_ai.tool.call.result  (captureContent=true only; OFF default)
+#   github.copilot.tool.parameters.command  (terminal calls, truncated)
+#   github.copilot.tool.parameters.file_path  (edit calls)
+#   gen_ai.conversation.id  (THE D7 session join key; must match hook log session_id)
+#   mcp_tool_name, mcp_server_name_hash  (MCP calls, zero-server default = never present)
+#
+# OI-13-D: attribute names are experimental (Development status, SemConv v1.41.0).
+# They MUST be re-verified against the pinned VS Code build's emitted spans before
+# asserting their stability. Mark as REQUIRES-LIVE-RUNTIME for re-verification at item 18.
+#
+# Content-capture defense-in-depth processor:
+#   Even though captureContent is OFF by default, the attribute_filter processor below
+#   DROPS gen_ai.tool.call.arguments and gen_ai.tool.call.result from any span that
+#   contains them (defense-in-depth against a future captureContent=true enable or a
+#   VS Code update that changes the default). SPEC-07 section 10-C requirement.
+
+receivers:
+  otlp:
+    protocols:
+      # OTLP/HTTP on 4318. VS Code sends here (otlpEndpoint default).
+      http:
+        endpoint: "0.0.0.0:4318"
+        # No TLS in the local deployment (VS Code sends to localhost).
+        # For a remote collector, add TLS here.
+      # OTLP/gRPC on 4317 (accepted but VS Code primarily uses HTTP).
+      grpc:
+        endpoint: "0.0.0.0:4317"
+
+processors:
+  # Batch processor: reduces export calls without dropping events.
+  batch:
+    timeout: 5s
+    send_batch_size: 100
+    send_batch_max_size: 200
+
+  # Content-capture defense-in-depth: drop attributes that capture content.
+  # Even if captureContent=true is set (it MUST NOT be, but defense-in-depth),
+  # these attributes are stripped before reaching the sink.
+  # This is the SPEC-07 section 10-C "scrub sensitive attributes" requirement.
+  # Note: 'filter' below means 'drop from span'; it does NOT filter which spans pass.
+  attributes/scrub_content:
+    actions:
+      # Drop tool call arguments (may contain secret-carrying CLI args).
+      - key: "gen_ai.tool.call.arguments"
+        action: delete
+      # Drop tool call results (may contain sensitive output).
+      - key: "gen_ai.tool.call.result"
+        action: delete
+      # Drop full prompt/message content (if somehow present).
+      - key: "gen_ai.input.messages"
+        action: delete
+      - key: "gen_ai.output.messages"
+        action: delete
+
+  # Memory limiter: prevent OOM on span floods.
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 128
+    spike_limit_mib: 64
+
+exporters:
+  # Logging exporter: writes spans to stdout (captured by Docker log driver).
+  # This is the primary durable record: Docker log driver appends to the container log,
+  # which is host-side and not writable by the devcontainer.
+  logging:
+    loglevel: info
+    sampling_initial: 2
+    sampling_thereafter: 500
+
+  # File exporter: appends spans as JSONL to the host volume.
+  # This is the secondary append-only record.
+  # The file is on the host (mounted into the otel-collector container),
+  # NOT inside the devcontainer. The devcontainer cannot write to it.
+  file:
+    path: /var/log/copilot-otel/spans.jsonl
+    rotation:
+      max_megabytes: 100
+      max_days: 90
+      max_backups: 10
+      localtime: false
+
+  # OTLP/gRPC exporter to Jaeger (for human trace viewing).
+  # Jaeger is the read-only observer; it is not the authoritative sink.
+  otlp/jaeger:
+    endpoint: "jaeger:14250"
+    tls:
+      insecure: true   # Jaeger in the detect-net is trusted (localhost/bridge only)
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/scrub_content, batch]
+      exporters: [logging, file, otlp/jaeger]
+
+  # Health check extension for the Compose healthcheck.
+  extensions: [health_check]
+
+extensions:
+  health_check:
+    endpoint: "0.0.0.0:13133"

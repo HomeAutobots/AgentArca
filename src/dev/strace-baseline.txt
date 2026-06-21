@@ -1,0 +1,124 @@
+# src/dev/strace-baseline.txt
+# OI-09-A: strace baseline for agent-seccomp.json generation.
+#
+# Generated: 2026-06-14
+# Method: docker run --security-opt seccomp=unconfined --cap-add=SYS_PTRACE
+#         ubuntu:22.04 bash -c "apt-get install strace nodejs npm python3 python3-pip &&
+#         strace -c -f -o /tmp/strace-output.txt /tmp/workload.sh"
+#
+# Workload (representative Node.js + Python + npm + pip operations):
+#   - node: fs.writeFile, fs.readFile, fs.mkdir, os.platform
+#   - python3: pathlib, json, hashlib, re, tempfile
+#   - npm: npm init, npm install semver --ignore-scripts
+#   - pip3: pip install requests
+#   - shell: bash, env, file operations
+#
+# This file is the auditable record supporting agent-seccomp.json.
+# The allowlist in agent-seccomp.json was built from this observed syscall set.
+# io_uring syscalls (io_uring_setup, io_uring_enter, io_uring_register) are
+# NOT observed here and are explicitly excluded from agent-seccomp.json.
+
+% time     seconds  usecs/call     calls    errors syscall
+------ ----------- ----------- --------- --------- ----------------
+ 60.97   19.401537        4748      4086       631 futex
+ 19.52    6.211790      345099        18         8 wait4
+ 11.18    3.558410        7088       502           epoll_wait
+  1.85    0.588869          65      9008      4278 statx
+  1.34    0.427403          51      8319       807 newfstatat
+  1.09    0.347712         105      3300       548 openat
+  0.68    0.216421          57      3752        34 read
+  0.58    0.185934          64      2867           close
+  0.36    0.114403          43      2650         6 lseek
+  0.28    0.089931          67      1332           mprotect
+  0.28    0.087905          89       987           write
+  0.28    0.087593         290       302       184 mkdir
+  0.25    0.079104          95       830           mmap
+  0.22    0.069198         188       367           munmap
+  0.16    0.052053          45      1132      1066 ioctl
+  0.15    0.047390         340       139           madvise
+  0.13    0.040047          49       810           brk
+  0.09    0.027365          65       418           pread64
+  0.07    0.023281          61       381           rt_sigaction
+  0.05    0.016754          64       259           rt_sigprocmask
+  0.05    0.016415         631        26           clone3
+  0.05    0.016229          60       268           getdents64
+  0.05    0.015817         585        27        15 execve
+  0.04    0.011144          44       248           getpid
+  0.03    0.009799          97       100           rename
+  0.03    0.009649          79       121        34 connect
+  0.01    0.004104         513         8           clone
+  0.01    0.003448          52        66           getegid
+  0.01    0.003325         166        20           fsync
+  0.01    0.003191          69        46           set_robust_list
+  0.01    0.003024          40        75         1 fcntl
+  0.01    0.002933          77        38           rseq
+  0.01    0.002862          44        65           poll
+  0.01    0.002860          73        39        14 access
+  0.01    0.002801          35        79           getgid
+  0.01    0.002779          69        40           getsockname
+  0.01    0.002647          33        78           getuid
+  0.01    0.002514          37        67           geteuid
+  0.01    0.002460          94        26           socket
+  0.01    0.002388          59        40           prlimit64
+  0.01    0.002140          85        25         3 epoll_ctl
+  0.01    0.002133          71        30         9 readlink
+  0.01    0.001856          71        26           getrandom
+  0.01    0.001814         100        18           unlink
+  0.00    0.001437         718         2           link
+  0.00    0.001395          77        18           chmod
+  0.00    0.001284          53        24        12 arch_prctl
+  0.00    0.001212         134         9           rmdir
+  0.00    0.001140          95        12           set_tid_address
+  0.00    0.001113         159         7         1 bind
+  0.00    0.001075          48        22           umask
+  0.00    0.001014         202         5           unlinkat
+  0.00    0.001007          55        18           pipe2
+  0.00    0.000992         992         1           symlink
+  0.00    0.000964          40        24           recvmsg
+  0.00    0.000954          95        10           sendto
+  0.00    0.000790         395         2           vfork
+  0.00    0.000750          83         9           eventfd2
+  0.00    0.000616          28        22         2 setsockopt
+  0.00    0.000578          48        12           dup2
+  0.00    0.000555          55        10           epoll_create1
+  0.00    0.000483          21        23           uname
+  0.00    0.000434          54         8           rt_sigreturn
+  0.00    0.000395          79         5           sysinfo
+  0.00    0.000371         185         2           sendmmsg
+  0.00    0.000308          51         6           dup
+  0.00    0.000273          45         6           recvfrom
+  0.00    0.000222         111         2         2 statfs
+  0.00    0.000189          47         4           chown
+  0.00    0.000151          50         3           getppid
+  0.00    0.000149          24         6           getsockopt
+  0.00    0.000124         124         1           getpgrp
+  0.00    0.000118          59         2           chdir
+  0.00    0.000110          10        11           getcwd
+  0.00    0.000081          40         2         2 fadvise64
+  0.00    0.000071          17         4           prctl
+  0.00    0.000000           0         2           getpeername
+  0.00    0.000000           0         1           gettid
+------ ----------- ----------- --------- --------- ----------------
+100.00   31.821787         734     43330      7657 total
+
+# Observed syscalls (sorted, deduped):
+# access, arch_prctl, bind, brk, chdir, chmod, chown, clone, clone3,
+# close, connect, dup, dup2, epoll_create1, epoll_ctl, epoll_wait,
+# eventfd2, execve, fadvise64, fcntl, fsync, futex, getcwd, getdents64,
+# getegid, geteuid, getgid, getpgrp, getpeername, getpid, getppid,
+# getrandom, getsockopt, gettid, getuid, ioctl, lseek, link, madvise,
+# mkdir, mmap, mprotect, munmap, newfstatat, openat, pipe2, poll, pread64,
+# prctl, prlimit64, read, readlink, recvfrom, recvmsg, rename, rmdir,
+# rseq, rt_sigaction, rt_sigprocmask, rt_sigreturn, sendmmsg, sendto,
+# set_robust_list, set_tid_address, setsockopt, socket, statfs, statx,
+# symlink, sysinfo, uname, umask, unlink, unlinkat, vfork, wait4, write
+
+# Syscalls explicitly NOT observed (and excluded from agent-seccomp.json):
+#   io_uring_setup, io_uring_enter, io_uring_register (excluded per ADR-004 D2)
+#   ptrace, perf_event_open, kexec_load, mount, umount2 (not needed, attack surface)
+#   init_module, finit_module (kernel modules - not needed)
+#   create_module, delete_module (not needed)
+#   bpf (eBPF - not needed for Node/Python workload)
+#   userfaultfd (kernel attack surface)
+#   lookup_dcookie (not needed)
+#   pivot_root (not needed in container)

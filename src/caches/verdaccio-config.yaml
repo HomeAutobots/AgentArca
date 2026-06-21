@@ -1,0 +1,116 @@
+# src/caches/verdaccio-config.yaml
+# Verdaccio npm pull-through cache configuration.
+# ADR-002 D7 (pull-through caches as R-b mitigation 4), item 14.
+# RC-14-2 applied 2026-06-14: removed minAgeDays setting (option b - remove + document).
+#
+# WHAT THIS CACHE PROVIDES:
+#   R-b EGRESS MINIMIZATION (delivered): the devcontainer cannot reach
+#   registry.npmjs.org directly. npm installs go through Verdaccio, which fetches
+#   upstream via the gateway proxy (HTTPS_PROXY=http://gateway:8080). The gateway's
+#   squid.conf cache_src ACL permits registry.npmjs.org only from the cache-net
+#   subnet (172.30.0.0/24, the cache containers). The devcontainer's proxy traffic
+#   arrives on 127.0.0.1 and is denied for registry SNIs.
+#
+# WHAT THIS CACHE DOES NOT PROVIDE:
+#   PUBLICATION-AGE QUARANTINE (not delivered, tracked as item-15 hardening):
+#   minAgeDays is NOT configured here. Verdaccio 5.x (the current image series;
+#   latest stable at time of writing is 6.7.2) SILENTLY IGNORES minAgeDays when
+#   set as a "packages:" property - it is a @verdaccio/package-filter plugin
+#   feature that requires explicit installation + wiring under "filters:", not a
+#   built-in packages: key. Setting it in packages: has no effect at runtime.
+#   This was verified by the security-reviewer (item-14 review, RC-14-2, 2026-06-14).
+#   A silently-ignored security setting manufactures false confidence (CLAUDE.md
+#   honesty-over-false-security invariant). It has been removed rather than kept.
+#   The gap is recorded in the residual-risk register under R-j (supply-chain).
+#   Tracked for item-15 hardening: to enforce publication-age quarantine, install
+#   @verdaccio/package-filter and wire it under "filters:" with a minAgeDays value,
+#   or migrate to a digest-pinned image series where the filter is bundled and
+#   verify AC-14-P03 (a package published < 7 days ago is actually rejected).
+#
+# AUTH: disabled for internal use (no public access; cache-net is isolated).
+# Verdaccio runs on copilot-net only; the devcontainer reaches it at
+# http://verdaccio:4873. No external network access is permitted to this port
+# (copilot-net is a private Docker bridge network, pinned subnet 172.31.0.0/24,
+# no published ports).
+#
+# UPSTREAM: npmjs via the gateway proxy (HTTPS_PROXY=http://gateway:8080).
+# The cache containers reach registry.npmjs.org through the gateway's SNI-splice
+# filter. The gateway allows registry.npmjs.org only from the cache subnet
+# (cache-net, 172.30.0.0/24). The devcontainer cannot reach registry.npmjs.org
+# directly (its traffic comes from 127.0.0.1, which fails the cache_src ACL).
+
+#
+# Storage: named Docker volume (NOT a host bind mount, AC-14-item requirement).
+# The storage path inside the container is /verdaccio/storage.
+# Mounted as the named volume 'verdaccio-storage' in the compose file.
+
+storage: /verdaccio/storage
+auth:
+  htpasswd:
+    file: /verdaccio/conf/htpasswd
+    # max_users: -1 disables new registrations (read-only pull-through mode).
+    max_users: -1
+
+web:
+  enable: false
+
+# Upstream npm registry, proxied through the gateway.
+# The cache container sends its upstream requests with HTTPS_PROXY=http://gateway:8080,
+# so requests to registry.npmjs.org go through the gateway's Squid SNI-splice proxy.
+# This satisfies OI-14-A: upstream requests appear in Squid access.log from the
+# cache container's IP (not from the devcontainer's 127.0.0.1).
+uplinks:
+  npmjs:
+    url: https://registry.npmjs.org
+    # upstream_prefix: disables publishing to the upstream (pull-only).
+    # maxage: how long Verdaccio uses its local cached metadata before re-validating.
+    # This is the metadata TTL, not the package age filter.
+    maxage: 10m
+    # timeout: how long to wait for upstream before returning an error.
+    timeout: 30s
+    # max_fails: after this many failures, the uplink is considered down.
+    max_fails: 3
+    # fail_timeout: after max_fails, wait this long before retrying upstream.
+    fail_timeout: 5m
+
+packages:
+  "@*/*":
+    # All scoped packages.
+    # access: Internal access only (no auth required inside the container network).
+    # publish: none (no publishing allowed; this is a read-only pull-through cache).
+    # proxy: use the npmjs uplink for packages not cached locally.
+    access: $all
+    publish: $authenticated
+    proxy: npmjs
+    # NOTE: minAgeDays is NOT set here. See header comment for rationale.
+    # Short version: it is silently ignored by Verdaccio 5.x as a packages: key.
+    # Publication-age quarantine is an item-15 hardening item, not shipped here.
+
+  "**":
+    # All unscoped packages.
+    access: $all
+    publish: $authenticated
+    proxy: npmjs
+    # NOTE: minAgeDays is NOT set here. See header comment for rationale.
+
+# Listen on all interfaces inside the container so the devcontainer can reach it.
+# External access is prevented by the Docker network isolation (copilot-net is
+# a private bridge network; no ports are published to the host).
+listen: "0.0.0.0:4873"
+
+# Logging: output to stdout for Docker log collection.
+logs:
+  - type: stdout
+    format: pretty
+    level: http
+
+# Security: no public access, no UI, minimal attack surface.
+# The cache is for internal use only inside the copilot-net network.
+security:
+  api:
+    legacy_token_api: false
+    jwt:
+      sign:
+        expiresIn: 29d
+      verify:
+        someProp: someValue

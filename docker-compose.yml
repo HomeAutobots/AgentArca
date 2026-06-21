@@ -1,0 +1,783 @@
+# docker-compose.yml (top-level)
+# Hardened multi-agent dev container stack.
+# ADR-002 D1 (gateway sidecar), ADR-004 D1/D2 (Stage-0 baseline, item 09).
+# ADR-008 D1/D2/D3/D6 (multi-agent profile model, items 20-24).
+# ADR-009 (as-built corrections: per-profile gateways, repo-root .env, read-only-HOME redirect).
+# ITEM 14: Pull-through caches (verdaccio + devpi) added 2026-06-14.
+# ITEMS 20-24: Multi-agent Compose profiles (copilot|claude|codex) added 2026-06-17.
+# PHASE-8-LIVE-FIX 2026-06-20: Three production defects fixed (see plan/validation/Phase8-live-findings.md).
+#   FIX-F2: Per-profile gateway services (gateway-copilot, gateway-claude, gateway-codex).
+#            Each has profiles: [<agent>] and HARDCODED SQUID_AGENT_FRAGMENT (not interpolated).
+#            YAML anchor x-gateway-base holds all shared hardening. Network alias 'gateway' on
+#            copilot-net lets caches find whichever gateway is active.
+#   FIX-F3: CLAUDE_CONFIG_DIR=/home/devuser/.claude on devcontainer-claude.
+#            CODEX_HOME=/home/devuser/.codex on devcontainer-codex (defensive).
+#   FIX-F1: env_file removed from devcontainer-claude, devcontainer-codex, AND devcontainer
+#            (copilot). All three profiles now use Compose interpolation (${VAR:-} syntax)
+#            from the REPO-ROOT .env file. src/.env is no longer read by any service.
+#            Previously copilot had env_file: ./src/.env, which imported EVERY key in the
+#            file -- including a live CLAUDE_CODE_OAUTH_TOKEN placed by the user -- into
+#            the copilot container, violating invariant 6 and ADR-008 D3 absence-of-
+#            declaration isolation. Phase8-build-security-review-3 BLOCK-1 fix.
+#
+# GP-02 FIX 2026-06-20: devpi cache upstream fetch fails on fresh volume.
+#   ROOT CAUSE: The 'gateway' alias was only declared on copilot-net. devpi/verdaccio resolved
+#   'gateway' to the gateway's copilot-net IP (172.31.0.x). The TCP connection from devpi
+#   to gateway:8080 arrived at Squid from the devpi copilot-net interface (172.31.0.x), which
+#   is NOT in the cache_src ACL (172.30.0.0/24). Squid's 'ssl_bump splice allowed_registry_SNI
+#   cache_src' rule requires source IP in 172.30.0.0/24 to splice pypi.org/npmjs.org. With a
+#   copilot-net source IP, the splice rule did NOT fire; ssl_bump terminate all fired instead,
+#   resetting the TLS handshake with httpcore.ConnectError (empty reason = TCP RST after CONNECT 200).
+#   FIX: Add 'gateway-cache' alias on cache-net for all three gateway services. devpi and
+#   verdaccio now use HTTPS_PROXY=http://gateway-cache:8080. 'gateway-cache' resolves to the
+#   gateway's cache-net IP (172.30.0.x). The TCP connection arrives at Squid from 172.30.0.x,
+#   which IS in cache_src. The registry splice rule fires and TLS succeeds.
+#   SECURITY: This fix strengthens the boundary. devpi/verdaccio now MUST go through the gateway
+#   cache-net path (the intended path). Direct egress is still blocked by iptables. The cache_src
+#   source-ACL is still enforced. No change to what registries are accessible or to which
+#   containers can reach them. The devcontainer still cannot reach registry SNIs (it connects on
+#   127.0.0.1, not cache-net, so cache_src never matches for the devcontainer).
+#
+# CLEAN-BASE REFACTOR (ADR-009, 2026-06-20):
+#   x-devcontainer-base anchor deduplicates the hardening surface shared across the three
+#   devcontainer services (per audit Finding 2). x-agent-env-base deduplicates the ~15
+#   identical credential-nulling env vars. Each service keeps only its per-profile bits:
+#   profiles, build, container_name, network_mode, depends_on, token-store + cache volume
+#   names, agent-specific immutability bind mount, agent config-dir env, credential vars, AGENT.
+#
+# PROFILE-SWITCHED USAGE (ADR-008 D1):
+#   docker compose --profile copilot up    # GitHub Copilot CLI (existing, unchanged)
+#   docker compose --profile claude  up    # Claude Code
+#   docker compose --profile codex   up    # OpenAI Codex CLI
+#
+# Exactly ONE agent profile per run (D6 profile mutual exclusion).
+# Running two profiles concurrently is a STOP-AND-FLAG condition (ADR-008 D6, R-m).
+#
+# Design invariants enforced here:
+#   - Each profile's gateway holds NET_ADMIN and NET_RAW; no devcontainer holds either.
+#   - devcontainer uses network_mode: "service:gateway-<profile>" (shares gateway netns).
+#   - devcontainer cannot start until its profile's gateway is healthy (depends_on condition).
+#   - No docker.sock mount anywhere (ADR-004 D3).
+#   - Workspace in a named volume, not a host bind mount (ADR-004 D1 condition c).
+#   - read_only: true on the devcontainer rootfs (ADR-004 D2 Stage-0).
+#   - tmpfs on /tmp and /run (writable scratch space under read-only rootfs).
+#   - Named volumes for token stores and caches (required for read_only rootfs).
+#   - seccomp profile from real strace (src/dev/agent-seccomp.json, OI-09-A).
+#   - Copilot proxy MUST be http:// (docs.github.com, re-verified 2026-06-13).
+#   - IPv6 disabled on ALL networks (ADR-002 D5/D6d).
+#   - Per-profile token-store volumes with DISTINCT names (ADR-008 D3, R-m binding req b).
+#   - No host bind-mount of ~/.claude or ~/.codex from the host (ADR-008 D3, SPEC-21 section 2).
+#   - ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN declared ONLY in devcontainer-claude.
+#   - OPENAI_API_KEY / CODEX_API_KEY declared ONLY in devcontainer-codex.
+#   - COPILOT_GITHUB_TOKEN declared ONLY in devcontainer-copilot (existing pattern, unchanged).
+#
+# ITEM 14 additions:
+#   - cache-net (172.30.0.0/24): a dedicated network for cache->gateway upstream traffic.
+#     Each gateway joins both copilot-net and cache-net.
+#     Verdaccio and devpi join both copilot-net and cache-net.
+#     Devcontainer does NOT join cache-net (it shares the gateway netns on copilot-net).
+#   - Source-ACL: cache containers' HTTPS_PROXY upstream requests to the gateway arrive
+#     from their cache-net IP (172.30.0.x), matching squid.conf cache_src ACL.
+#     The devcontainer's proxy requests arrive on 127.0.0.1 (gateway netns shared),
+#     which does NOT match cache_src. Registry SNIs are only spliced for cache_src.
+#
+# Verified 2026-06-14: ubuntu@sha256:4f838... = ubuntu:22.04
+#
+# DO-NOT-MOUNT LIST (ADR-003 D1 + ADR-008 D3 additions):
+#   ~/.aws, ~/.ssh, ~/.config/gh, ~/.netrc, ~/.docker/config.json, ~/.gitconfig,
+#   ~/.kube, ~/.npmrc, ~/.pypirc, ~/.azure, ~/.config/gcloud, ~/.gnupg,
+#   ~/.claude (ADDED ADR-008 D3), ~/.codex (ADDED ADR-008 D3).
+#   None of these appear as bind-mount sources in this file.
+#
+# IMPORTANT: Any port forward for dev servers must be declared on the profile's 'gateway-<agent>'
+# service (the netns owner), not on any devcontainer service (no own netns, D1).
+
+# ============================================================
+# YAML ANCHOR: shared gateway hardening (FIX-F2, 2026-06-20)
+# All per-profile gateways use this anchor to avoid duplicating security config.
+# Deviations from this anchor are intentional and documented per-service below.
+# ============================================================
+x-gateway-base: &gateway-base
+  build:
+    context: ./src/gateway
+    dockerfile: Dockerfile
+  # Gateway holds NET_ADMIN and NET_RAW to program iptables.
+  # The dev container gets NEITHER - this is the kernel-enforced boundary.
+  # SETGID and SETUID are required by Squid to fork worker processes and
+  # drop privileges to the 'proxy' user/group (cache_effective_user/group).
+  cap_add:
+    - NET_ADMIN
+    - NET_RAW
+    - SETGID
+    - SETUID
+  # All other capabilities dropped.
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  networks:
+    copilot-net:
+      # Network alias 'gateway' lets the devcontainer (via shared gateway netns) and
+      # other services on copilot-net find this gateway by name. Since only one profile
+      # runs at a time (D6 mutual exclusion), the alias is unambiguous on copilot-net.
+      aliases:
+        - gateway
+    # ITEM 14: gateway also joins cache-net so it can accept connections
+    # from the cache containers on that network.
+    # GP-02 FIX: 'gateway-cache' alias on cache-net lets verdaccio/devpi find the
+    # gateway via HTTPS_PROXY=http://gateway-cache:8080. 'gateway-cache' resolves to
+    # the gateway's cache-net IP (172.30.0.x), so the TCP connection from devpi/verdaccio
+    # to the proxy arrives at Squid from a 172.30.0.x source IP, matching cache_src ACL.
+    # Without this alias, devpi resolved 'gateway' to the copilot-net IP (172.31.0.x),
+    # which did NOT match cache_src, causing ssl_bump terminate to fire instead of splice.
+    cache-net:
+      aliases:
+        - gateway-cache
+  # DNS: override Docker Desktop's broken embedded DNS (127.0.0.11) for custom bridge
+  # networks. On Docker Desktop (macOS), use the Docker Desktop host resolver (192.168.65.7).
+  # RUNTIME FINDING 2026-06-14: embedded 127.0.0.11 DNS is unusable in Docker Desktop
+  # custom networks; 192.168.65.7 is the correct resolver for this environment.
+  dns:
+    - 192.168.65.7
+  # Healthcheck: reports healthy ONLY after self-verification passes.
+  # - gateway-selfcheck.sh fails if example.com is reachable (boundary open)
+  # - gateway-selfcheck.sh fails if the profile's primary host is unreachable (allowlist broken)
+  # devcontainer cannot start until this reports healthy (fail-closed startup ordering).
+  healthcheck:
+    test: ["CMD", "/usr/local/bin/gateway-selfcheck.sh"]
+    interval: 15s
+    timeout: 20s
+    retries: 5
+    start_period: 45s
+  restart: unless-stopped
+  # Port forward for dev servers must be declared here (gateway owns the netns).
+  # Uncomment and adjust for any dev server port forwarding:
+  # ports:
+  #   - "3000:3000"   # Node.js dev server
+  #   - "8000:8000"   # Python dev server
+
+# ============================================================
+# YAML ANCHOR: shared devcontainer hardening (ADR-009 clean-base refactor)
+# All three devcontainer services (devcontainer, devcontainer-claude, devcontainer-codex)
+# merge this anchor. It holds EVERY hardening directive that is identical across profiles:
+# cap_drop, security_opt (no-new-privileges + seccomp), read_only, tmpfs, pids_limit,
+# mem_limit, cpus, working_dir, user, the two shared read-only bind mounts (/etc/vscode +
+# hooks), and the workspace volume.
+#
+# EQUIVALENCE: after anchor expansion, the rendered config per profile MUST be identical
+# to the pre-refactor expanded config for each hardening directive. Verified by
+# docker compose --profile {copilot|claude|codex} config diff (see plan/STATE.md).
+#
+# Each service adds ONLY its per-profile bits after the merge:
+#   - profiles, build, container_name, network_mode, depends_on
+#   - token-store + cache volume mounts (distinct names per profile)
+#   - agent-specific immutability bind mount (settings.json / config.toml)
+#   - agent config-dir env var (CLAUDE_CONFIG_DIR / CODEX_HOME)
+#   - per-profile credential env vars (none for others = absence-of-declaration isolation)
+#   - AGENT identifier
+# ============================================================
+x-devcontainer-base: &devcontainer-base
+  # Stage-0 baseline (ADR-004 D2):
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+    # Custom seccomp profile generated from real strace of Node.js + Python workload.
+    # OI-09-A: generated 2026-06-14 from strace-baseline.txt. io_uring excluded.
+    # Path is relative to this docker-compose.yml file (top-level).
+    - seccomp=./src/dev/agent-seccomp.json
+  # Read-only rootfs (ADR-004 D2 Stage-0).
+  read_only: true
+  tmpfs:
+    - /tmp:mode=1777
+    - /run:mode=1777,uid=1000,gid=1000
+  # Resource limits (ADR-004 D2 Stage-0).
+  pids_limit: 512
+  mem_limit: 6g
+  cpus: "3"
+  working_dir: /workspace
+  user: "1000:1000"
+  # NOTE: volumes are NOT in this anchor because YAML merge replaces lists entirely
+  # (it does not append). Each service declares its own volumes: block that starts with
+  # workspace and the shared bind mounts, then adds its per-profile token-store and
+  # cache volumes. The shared bind mounts are documented as "ITEM 11 IMMUTABILITY" in
+  # each service block.
+
+# ============================================================
+# YAML ANCHOR: shared devcontainer null/proxy/hook env vars (ADR-009)
+# Merged into each devcontainer service's environment: block. Holds the ~15 identical
+# credential-nulling, proxy, and detection env vars shared across all three profiles.
+# Each service appends its own credential vars + AGENT + config-dir var after the merge.
+# ============================================================
+x-agent-env-base: &agent-env-base
+  HTTP_PROXY: "http://localhost:8080"
+  HTTPS_PROXY: "http://localhost:8080"
+  NO_PROXY: "localhost,127.0.0.1,verdaccio,devpi"
+  # Credential forwarding: null host credentials at the compose level (item 10, ADR-003 D1).
+  # These keys are declared as empty strings so any host-shell value is overridden to empty.
+  SSH_AUTH_SOCK: ""
+  GIT_ASKPASS: ""
+  VSCODE_GIT_ASKPASS_MAIN: ""
+  VSCODE_GIT_ASKPASS_NODE: ""
+  VSCODE_GIT_ASKPASS_EXTRA_ARGS: ""
+  # NOTE: GH_TOKEN and GITHUB_TOKEN are NOT in this anchor.
+  # They are declared only in the copilot service (absence-of-declaration isolation:
+  # claude/codex do not null-set these, they are absent from those environments).
+  # Copilot explicitly nulls them to prevent host GitHub credentials from bleeding in.
+  # Claude and Codex use absence-of-declaration (ADR-008 D3, SPEC-21 section 3).
+  BROWSER: ""
+  GPG_AGENT_INFO: ""
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: "credential.helper"
+  GIT_CONFIG_VALUE_0: "/bin/false"
+  VSCODE_IPC_HOOK_CLI: ""
+  VSCODE_GIT_IPC_HANDLE: ""
+  REMOTE_CONTAINERS_IPC: ""
+  REMOTE_CONTAINERS_SOCKETS: ""
+  REMOTE_CONTAINERS_DISPLAY_SOCK: ""
+  HOOK_LOG_SINK: "http://host.docker.internal:3001/ingest"
+  MCP_DETECTION_SINK: "http://host.docker.internal:3001/ingest"
+  npm_config_registry: "http://verdaccio:4873"
+  PIP_INDEX_URL: "http://devpi:3141/root/pypi/+simple/"
+  PIP_TRUSTED_HOST: "devpi"
+
+services:
+
+  # ============================================================
+  # COPILOT GATEWAY (FIX-F2: per-profile gateway, hardcoded fragment)
+  # Runs when --profile copilot is active.
+  # container_name PRESERVED as copilot-gateway (acc15 / rt16 test suites reference it).
+  # SQUID_AGENT_FRAGMENT is HARDCODED (not interpolated) to prevent the
+  # "wrong fragment on gateway" defect found in Phase 8 live testing.
+  # ============================================================
+  gateway-copilot:
+    <<: *gateway-base
+    profiles: [copilot]
+    container_name: copilot-gateway
+    environment:
+      # HARDCODED - not interpolated. The gateway-copilot service ALWAYS loads copilot.conf.
+      # This is the fix for the Phase 8 defect: the devcontainer's SQUID_AGENT_FRAGMENT
+      # env var does NOT propagate to a separate gateway container.
+      SQUID_AGENT_FRAGMENT: "copilot.conf"
+
+  # ============================================================
+  # CLAUDE GATEWAY (FIX-F2: per-profile gateway, hardcoded fragment)
+  # Runs when --profile claude is active.
+  # SQUID_AGENT_FRAGMENT is HARDCODED to claude.conf.
+  # selfcheck check-b probes api.anthropic.com (correct for claude profile).
+  # ============================================================
+  gateway-claude:
+    <<: *gateway-base
+    profiles: [claude]
+    container_name: claude-gateway
+    environment:
+      # HARDCODED - not interpolated. The gateway-claude service ALWAYS loads claude.conf.
+      SQUID_AGENT_FRAGMENT: "claude.conf"
+
+  # ============================================================
+  # CODEX GATEWAY (FIX-F2: per-profile gateway, hardcoded fragment)
+  # Runs when --profile codex is active.
+  # SQUID_AGENT_FRAGMENT is HARDCODED to codex.conf.
+  # selfcheck check-b probes api.openai.com (correct for codex profile).
+  # ============================================================
+  gateway-codex:
+    <<: *gateway-base
+    profiles: [codex]
+    container_name: codex-gateway
+    environment:
+      # HARDCODED - not interpolated. The gateway-codex service ALWAYS loads codex.conf.
+      SQUID_AGENT_FRAGMENT: "codex.conf"
+
+  # ============================================================
+  # COPILOT PROFILE (existing, UNCHANGED in behavior, ADR-008 D1)
+  # docker compose --profile copilot up
+  #
+  # HOME-MOUNT ASYMMETRY (ADR-009 D-C, documented exception):
+  # copilot mounts the ENTIRE home dir: copilot-token-store:/home/devuser
+  # (the whole $HOME is a writable volume, preserving the Copilot CLI token path).
+  # claude and codex mount only a SUBDIR + use CLAUDE_CONFIG_DIR/CODEX_HOME redirect.
+  # The canonical hardened model for new agents is the subdir+redirect model (ADR-009 D-C).
+  # Copilot's whole-$HOME mount is an accepted, documented exception (future hardening pass).
+  # BINDING RULE: every new agent added must redirect ALL writable $HOME paths to its
+  # token-store volume (or it silently no-ops on the read-only rootfs).
+  # ============================================================
+  devcontainer:
+    <<: *devcontainer-base
+    profiles: [copilot]
+    build:
+      context: ./src/dev
+      dockerfile: Dockerfile
+    container_name: copilot-devcontainer
+    # Share the copilot gateway's network namespace.
+    # This means the devcontainer uses the gateway's netns and cannot mutate it.
+    # Even uid 0 inside devcontainer gets EPERM on iptables -F (AC-08-N01, ADR-002 D1).
+    network_mode: "service:gateway-copilot"
+    # Must not start until the copilot gateway is healthy (fail-closed startup ordering).
+    depends_on:
+      gateway-copilot:
+        condition: service_healthy
+      # ITEM 14: also wait for the caches to be up before the devcontainer starts.
+      verdaccio:
+        condition: service_started
+      devpi:
+        condition: service_started
+    volumes:
+      # Per-copilot volumes. workspace is listed first (matches pre-refactor ordering).
+      - workspace:/workspace
+      # Copilot token store: this profile ONLY (ADR-008 D3, R-m isolation).
+      # Whole-$HOME mount (ADR-009 D-C exception, see comment above).
+      - copilot-token-store:/home/devuser
+      # Per-profile cache volumes (FIX-3, R-m): distinct names prevent cross-profile
+      # cache poisoning. An injected agent cannot poison a cache another profile later reads.
+      - agent-npm-cache-copilot:/home/devuser/.npm
+      - agent-cache-copilot:/home/devuser/.cache
+      # Shared read-only bind mounts (inherited from anchor, MUST also be listed here
+      # because YAML merge replaces the volumes list entirely when per-service volumes exist).
+      - type: bind
+        source: ./src/managed-config
+        target: /etc/vscode
+        read_only: true
+      - type: bind
+        source: ./src/.github/hooks
+        target: /workspace/.github/hooks
+        read_only: true
+      # MUST NOT mount claude-token-store or codex-token-store here (D6 / R-m).
+    # COPILOT_GITHUB_TOKEN: Copilot-only credential (ADR-008 D3 absence-of-declaration isolation).
+    # ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, OPENAI_API_KEY, CODEX_API_KEY are NOT declared
+    # here (absence = not passed through). Source: repo-root .env (Compose interpolation).
+    #
+    # FIX-F1 (Phase8-build-security-review-3 BLOCK-1, 2026-06-20): env_file REMOVED from this
+    # service. The prior env_file: ./src/.env imported EVERY key in the file regardless of what
+    # the environment: block named. src/.env contained a live CLAUDE_CODE_OAUTH_TOKEN which bled
+    # into this container on every run, violating invariant 6 and ADR-008 D3. The fix switches
+    # copilot to the same single-key Compose interpolation mechanism claude/codex use.
+    # Source for COPILOT_GITHUB_TOKEN: repo-root .env (gitignored), NOT src/.env.
+    # src/.env is no longer read by any service and can be deleted by the user.
+    environment:
+      <<: *agent-env-base
+      # Copilot credential (SPEC-20/21 section 3). Source: repo-root .env interpolation.
+      # Absence-of-declaration ensures no other agent's token key can reach this container.
+      COPILOT_GITHUB_TOKEN: "${COPILOT_GITHUB_TOKEN:-}"
+      # Null host GitHub credential forwarding (ADR-003 D1, non-inheritance).
+      # These are declared here (not in the anchor) because for claude/codex absence is the
+      # isolation mechanism - only copilot needs to explicitly null them.
+      GH_TOKEN: ""
+      GITHUB_TOKEN: ""
+      # CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY / OPENAI_API_KEY / CODEX_API_KEY are NOT
+      # declared here. Absence-of-declaration is the isolation mechanism (ADR-008 D3).
+      # AGENT identifier for the integrity-check and detection scripts (SPEC-24 section 6).
+      AGENT: "copilot"
+      # No docker.sock mount (ADR-004 D3 hard constraint - NEVER).
+
+  # ============================================================
+  # CLAUDE CODE PROFILE (ADR-008 D1, items 21-24)
+  # docker compose --profile claude up
+  #
+  # HOME-MOUNT MODEL (ADR-009 D-C canonical): SUBDIR + CLAUDE_CONFIG_DIR redirect.
+  # claude-token-store is mounted at /home/devuser/.claude ONLY (not whole $HOME).
+  # CLAUDE_CONFIG_DIR=/home/devuser/.claude redirects all Claude state files into the
+  # writable volume. The $HOME root (/home/devuser) stays read-only (rootfs).
+  # ============================================================
+  devcontainer-claude:
+    <<: *devcontainer-base
+    profiles: [claude]
+    build:
+      # Build context is ./src (not ./src/dev) so the Dockerfile can COPY from both
+      # dev/ (base toolchain, entrypoint.sh, agent-seccomp.json) and managed-config/claude/
+      # (hardened settings.json). All COPY paths in Dockerfile.claude are relative to ./src.
+      context: ./src
+      dockerfile: dev/Dockerfile.claude
+    container_name: claude-devcontainer
+    network_mode: "service:gateway-claude"
+    depends_on:
+      gateway-claude:
+        condition: service_healthy
+      verdaccio:
+        condition: service_started
+      devpi:
+        condition: service_started
+    volumes:
+      # Per-claude volumes. workspace is listed first (matches pre-refactor ordering).
+      - workspace:/workspace
+      # Claude token store: this profile ONLY (ADR-008 D3, R-m isolation, SPEC-21 section 4).
+      # ~/.claude is the per-profile named volume; NOT a host bind mount.
+      # (Host ~/.claude is on the do-not-mount list per ADR-008 D3.)
+      - claude-token-store:/home/devuser/.claude
+      # Per-profile cache volumes (FIX-3, R-m): distinct names prevent cross-profile
+      # cache poisoning. An injected agent cannot poison a cache another profile later reads.
+      - agent-npm-cache-claude:/home/devuser/.npm
+      - agent-cache-claude:/home/devuser/.cache
+      # Shared read-only bind mounts (see note in devcontainer service above).
+      - type: bind
+        source: ./src/managed-config
+        target: /etc/vscode
+        read_only: true
+      - type: bind
+        source: ./src/.github/hooks
+        target: /workspace/.github/hooks
+        read_only: true
+      # Claude Code boundary-config immutability (FIX-1, SPEC-21 RC-21-2, AC-21-N08).
+      # Single-file read-only bind mounts over specific paths inside the claude-token-store
+      # named volume. Docker applies bind mounts after named volumes, so a more-specific
+      # file bind mount takes precedence: the agent sees these files as read-only (MS_RDONLY)
+      # even though the rest of ~/.claude/ (for .credentials.json) stays writable.
+      # The agent (UID 1000) gets EPERM on any write attempt to these files.
+      # NOTE: CLAUDE_CONFIG_DIR=/home/devuser/.claude (set below) means Claude Code reads
+      # settings.json from $CLAUDE_CONFIG_DIR/settings.json = /home/devuser/.claude/settings.json,
+      # which is exactly this read-only bind mount path. Immutability (AC-21-N08) is intact.
+      - type: bind
+        source: ./src/managed-config/claude/settings.json
+        target: /home/devuser/.claude/settings.json
+        read_only: true
+      # .mcp.json: project-level MCP zero-server config (Claude Code reads from workspace root).
+      # Mounted read-only at /workspace/.mcp.json so the integrity check resolves the managed
+      # file. allowManagedMcpServersOnly:true + allowedMcpServers:[] in settings.json ensures
+      # even a stray writable .mcp.json elsewhere cannot introduce a server.
+      - type: bind
+        source: ./.mcp.json
+        target: /workspace/.mcp.json
+        read_only: true
+      # MUST NOT mount copilot-token-store or codex-token-store here (D6 / R-m).
+    # CLAUDE CODE CREDENTIALS (ADR-008 D3 env-var scoping, SPEC-21 section 3).
+    # ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN are declared ONLY here.
+    # They are NOT declared in devcontainer (copilot) or devcontainer-codex services.
+    # Absence-of-declaration is the isolation mechanism (SPEC-21 section 3).
+    # OPENAI_API_KEY and COPILOT_GITHUB_TOKEN are NOT declared here.
+    #
+    # FIX-F1 (2026-06-20): env_file REMOVED from this service. The credentials below use
+    # Compose interpolation (${VAR:-} syntax) which resolves from the HOST SHELL ENVIRONMENT
+    # or the REPO-ROOT .env file (the .env at the same level as docker-compose.yml).
+    # env_file: ./src/.env was misleading because the environment: block below OVERRIDES
+    # env_file values for the same key. Tokens placed in src/.env were silently ignored.
+    # Source for claude credentials: repo-root .env (gitignored), NOT src/.env.
+    environment:
+      <<: *agent-env-base
+      # Claude Code config dir (FIX-F3, 2026-06-20): redirects ALL Claude state files
+      # (~/.claude.json, sessions/, projects/, .credentials.json) into the writable
+      # claude-token-store named volume at /home/devuser/.claude.
+      # Without this, ~/.claude.json is written to $HOME (/home/devuser) which is on the
+      # READ-ONLY rootfs, causing 'claude -p' to silently no-op (exit 0, empty output).
+      CLAUDE_CONFIG_DIR: "/home/devuser/.claude"
+      # Claude Code auth (SPEC-21 section 3). Exactly one should be non-empty.
+      # Source: repo-root .env (Compose interpolation). NOT src/.env.
+      # Path 1 (preferred): API key - talks only to api.anthropic.com
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      # Path 2: subscription OAuth token (minted via 'claude setup-token')
+      CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN:-}"
+      # Telemetry and auto-update disable (SPEC-22 section 4).
+      DISABLE_TELEMETRY: "1"
+      DISABLE_ERROR_REPORTING: "1"
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+      DISABLE_AUTOUPDATER: "1"
+      # MCP disable (SPEC-24 section 3c).
+      ENABLE_CLAUDEAI_MCP_SERVERS: "false"
+      # AGENT identifier for the integrity-check and detection scripts (SPEC-24 section 6).
+      AGENT: "claude"
+
+  # ============================================================
+  # OPENAI CODEX CLI PROFILE (ADR-008 D1, items 21-24)
+  # docker compose --profile codex up
+  #
+  # HOME-MOUNT MODEL (ADR-009 D-C canonical): SUBDIR + CODEX_HOME redirect.
+  # codex-token-store is mounted at /home/devuser/.codex ONLY (not whole $HOME).
+  # CODEX_HOME=/home/devuser/.codex explicitly points Codex to the writable volume.
+  # The $HOME root (/home/devuser) stays read-only (rootfs).
+  # ============================================================
+  devcontainer-codex:
+    <<: *devcontainer-base
+    profiles: [codex]
+    build:
+      # Build context is ./src (not ./src/dev) so the Dockerfile can COPY from both
+      # dev/ (base toolchain, entrypoint.sh) and managed-config/codex/ (config.toml)
+      # and also docs/decisions/ (codex-sha-pin.txt for SHA self-verify).
+      # All COPY paths in Dockerfile.codex are relative to ./src.
+      context: ./src
+      dockerfile: dev/Dockerfile.codex
+    container_name: codex-devcontainer
+    network_mode: "service:gateway-codex"
+    depends_on:
+      gateway-codex:
+        condition: service_healthy
+      verdaccio:
+        condition: service_started
+      devpi:
+        condition: service_started
+    volumes:
+      # Per-codex volumes. workspace is listed first (matches pre-refactor ordering).
+      - workspace:/workspace
+      # Codex token store: this profile ONLY (ADR-008 D3, R-m isolation, SPEC-21 section 4).
+      # ~/.codex is the per-profile named volume; NOT a host bind mount.
+      # (Host ~/.codex is on the do-not-mount list per ADR-008 D3.)
+      - codex-token-store:/home/devuser/.codex
+      # Per-profile cache volumes (FIX-3, R-m): distinct names prevent cross-profile
+      # cache poisoning. An injected agent cannot poison a cache another profile later reads.
+      - agent-npm-cache-codex:/home/devuser/.npm
+      - agent-cache-codex:/home/devuser/.cache
+      # Shared read-only bind mounts (see note in devcontainer service above).
+      - type: bind
+        source: ./src/managed-config
+        target: /etc/vscode
+        read_only: true
+      - type: bind
+        source: ./src/.github/hooks
+        target: /workspace/.github/hooks
+        read_only: true
+      # Codex boundary-config immutability (FIX-1, SPEC-21 RC-21-2, AC-23-N03).
+      # Single-file read-only bind mount over a specific path inside the codex-token-store
+      # named volume. The agent sees config.toml as read-only (MS_RDONLY, EPERM on write).
+      # The rest of ~/.codex/ (for auth.json) stays writable via the named volume.
+      # NOTE: CODEX_HOME=/home/devuser/.codex (set below) points Codex to the exact directory
+      # where this bind mount lands. Immutability (AC-23-N03) is intact.
+      - type: bind
+        source: ./src/managed-config/codex/config.toml
+        target: /home/devuser/.codex/config.toml
+        read_only: true
+      # MUST NOT mount copilot-token-store or claude-token-store here (D6 / R-m).
+    # CODEX CREDENTIALS (ADR-008 D3 env-var scoping, SPEC-21 section 3).
+    # OPENAI_API_KEY and CODEX_API_KEY are declared ONLY here.
+    # They are NOT declared in devcontainer (copilot) or devcontainer-claude services.
+    # Absence-of-declaration is the isolation mechanism (SPEC-21 section 3).
+    # ANTHROPIC_API_KEY and COPILOT_GITHUB_TOKEN are NOT declared here.
+    #
+    # FIX-F1 (2026-06-20): env_file REMOVED from this service. The credentials below use
+    # Compose interpolation (${VAR:-} syntax) which resolves from the HOST SHELL ENVIRONMENT
+    # or the REPO-ROOT .env file (the .env at the same level as docker-compose.yml).
+    # env_file: ./src/.env was misleading because the environment: block below OVERRIDES
+    # env_file values for the same key. Tokens placed in src/.env were silently ignored.
+    # Source for codex credentials: repo-root .env (gitignored), NOT src/.env.
+    environment:
+      <<: *agent-env-base
+      # Codex config dir (FIX-F3 defensive, 2026-06-20): explicitly set CODEX_HOME to the
+      # writable named volume mount point. Codex defaults to ~/.codex which IS the volume,
+      # but explicit is better than implicit to guard against future implicit-path confusion.
+      # The config.toml read-only bind mount at /home/devuser/.codex/config.toml is unaffected.
+      CODEX_HOME: "/home/devuser/.codex"
+      # Codex auth (SPEC-21 section 3). Exactly one should be non-empty.
+      # Source: repo-root .env (Compose interpolation). NOT src/.env.
+      # Path 1 (preferred): API key - talks only to api.openai.com
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      # Path 2: Codex-specific env var alias (same API key, alternative name)
+      CODEX_API_KEY: "${CODEX_API_KEY:-}"
+      # Path 3: subscription OAuth (token stored on codex-token-store volume; no env var needed)
+      # ANTHROPIC_API_KEY / GH_TOKEN / GITHUB_TOKEN / COPILOT_GITHUB_TOKEN are NOT declared here.
+      # Absence-of-declaration ensures these host vars cannot bleed into this container.
+      # AGENT identifier for the integrity-check and detection scripts (SPEC-24 section 6).
+      AGENT: "codex"
+
+  # ============================================================
+  # ITEM 14: Verdaccio npm pull-through cache
+  # No profiles: tag - starts with any profile. Reaches the active gateway via
+  # the 'gateway' network alias on copilot-net (set by whichever gateway-<agent> is active).
+  # ============================================================
+  verdaccio:
+    # Verdaccio npm pull-through cache.
+    # Image pinned by digest (multi-arch manifest list). Tag kept for readability.
+    # Digest resolved 2026-06-14: docker pull verdaccio/verdaccio:5 && docker inspect --format='{{index .RepoDigests 0}}'
+    # Multi-arch manifest list digest (amd64 + arm64): sha256:9d622d256378c6e7ae09f384774ee2f0f8ac67a66c066db55921a0b7218abc4c
+    image: verdaccio/verdaccio:5@sha256:9d622d256378c6e7ae09f384774ee2f0f8ac67a66c066db55921a0b7218abc4c
+    container_name: copilot-verdaccio
+    networks:
+      # copilot-net: so devcontainer can reach it at http://verdaccio:4873
+      - copilot-net
+      # cache-net: so its upstream HTTPS_PROXY requests arrive with 172.30.0.x source IP,
+      # matching the cache_src ACL in squid.conf (registry SNI splice allowed for this source).
+      - cache-net
+    volumes:
+      # Verdaccio config (read-only bind mount - managed config, not agent-writable).
+      - type: bind
+        source: ./src/caches/verdaccio-config.yaml
+        target: /verdaccio/conf/config.yaml
+        read_only: true
+      # Named volume for npm package cache storage (NOT a host bind mount).
+      - type: volume
+        source: verdaccio-storage
+        target: /verdaccio/storage
+    environment:
+      # GP-02 FIX: Use gateway-cache (cache-net alias) not gateway (copilot-net alias).
+      # Same routing fix as for devpi: 'gateway-cache' resolves to the gateway's cache-net
+      # IP (172.30.0.x), so Verdaccio's upstream requests to npmjs.org arrive at Squid
+      # from a 172.30.0.x source IP, matching cache_src ACL and triggering the correct
+      # ssl_bump splice rule. The previous 'gateway' alias pointed to the copilot-net IP
+      # (172.31.0.x), which is NOT in cache_src; registry splicing was silently blocked.
+      HTTPS_PROXY: "http://gateway-cache:8080"
+      HTTP_PROXY: "http://gateway-cache:8080"
+      # Do not proxy requests to local services.
+      NO_PROXY: "localhost,127.0.0.1,devpi,verdaccio"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    pids_limit: 64
+    expose:
+      - "4873"
+    depends_on:
+      # Verdaccio depends on the gateway being healthy. Because verdaccio has no profile,
+      # depends_on cannot reference a profile-specific gateway by name. The healthcheck
+      # gate is enforced at the devcontainer level (devcontainer depends on both its gateway
+      # AND the caches). Verdaccio will retry HTTPS_PROXY=http://gateway:8080 until the
+      # gateway alias resolves (Docker's embedded DNS retries on NXDOMAIN for service names).
+      # This is acceptable: if verdaccio starts before the gateway alias is present, the
+      # upstream fetch retries until the gateway is up. The devcontainer waits for both.
+      gateway-copilot:
+        condition: service_healthy
+        required: false
+      gateway-claude:
+        condition: service_healthy
+        required: false
+      gateway-codex:
+        condition: service_healthy
+        required: false
+    restart: unless-stopped
+
+  # ============================================================
+  # ITEM 14: devpi PyPI pull-through cache
+  # No profiles: tag - starts with any profile. Reaches the active gateway via
+  # the 'gateway' network alias on copilot-net.
+  # ============================================================
+  devpi:
+    # devpi PyPI pull-through mirror.
+    # No official devpi Docker image exists; built from src/caches/Dockerfile.devpi
+    # (python:3.11-slim base + devpi-server==6.9.3 installed via pip).
+    build:
+      context: ./src/caches
+      dockerfile: Dockerfile.devpi
+    container_name: copilot-devpi
+    networks:
+      # copilot-net: so devcontainer can reach it at http://devpi:3141
+      - copilot-net
+      # cache-net: so its upstream HTTPS_PROXY requests arrive with 172.30.0.x source IP,
+      # matching the cache_src ACL in squid.conf (registry SNI splice allowed for this source).
+      - cache-net
+    volumes:
+      # Named volume for devpi storage (NOT a host bind mount).
+      - type: volume
+        source: devpi-storage
+        target: /devpi
+    environment:
+      # GP-02 FIX: Use gateway-cache (cache-net alias) not gateway (copilot-net alias).
+      # 'gateway-cache' resolves to the gateway's cache-net IP (172.30.0.x). The TCP
+      # connection from devpi to the proxy arrives at Squid from devpi's cache-net
+      # interface (172.30.0.x), matching cache_src ACL. With the old 'gateway' alias
+      # (copilot-net IP), the source was 172.31.0.x which did NOT match cache_src, so
+      # Squid's ssl_bump terminate fired after CONNECT, resetting the TLS handshake.
+      HTTPS_PROXY: "http://gateway-cache:8080"
+      HTTP_PROXY: "http://gateway-cache:8080"
+      NO_PROXY: "localhost,127.0.0.1,devpi,verdaccio"
+      DEVPI_SERVERDIR: /devpi
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    pids_limit: 64
+    expose:
+      - "3141"
+    depends_on:
+      # Same pattern as verdaccio: depends on whichever gateway is active.
+      gateway-copilot:
+        condition: service_healthy
+        required: false
+      gateway-claude:
+        condition: service_healthy
+        required: false
+      gateway-codex:
+        condition: service_healthy
+        required: false
+    restart: unless-stopped
+    # CMD from Dockerfile.devpi: devpi-server --host 0.0.0.0 --port 3141 --serverdir /devpi
+    # (do not override command here; the Dockerfile CMD handles it)
+
+networks:
+  copilot-net:
+    driver: bridge
+    # IPv6 disabled to prevent dual-stack bypass of IPv4 iptables rules (ADR-002 D5/D6d).
+    enable_ipv6: false
+    # RC-14-1 FIX (2026-06-14): Pin copilot-net to a FIXED subnet so init-firewall.sh
+    # can destination-scope the cache-port ACCEPT rules to this subnet only.
+    ipam:
+      driver: default
+      config:
+        - subnet: "172.31.0.0/24"
+
+  # ITEM 14: Dedicated cache-net for cache->gateway upstream traffic.
+  cache-net:
+    driver: bridge
+    enable_ipv6: false
+    ipam:
+      driver: default
+      config:
+        - subnet: "172.30.0.0/24"
+
+volumes:
+  # ============================================================
+  # SHARED WORKSPACE VOLUME
+  # ============================================================
+  # Named volume for the dev workspace (not a host bind mount).
+  # ADR-004 D1 condition (c): disposable workspace; "delete the volume and start over."
+  # OI-09-G: clone-into-volume model.
+  # ADR-008 D6 / R-m: workspace is the ONLY cross-profile shared volume (deliberate).
+  # Cache volumes are per-profile (agent-npm-cache-{copilot,claude,codex},
+  # agent-cache-{copilot,claude,codex}) to prevent cross-profile cache poisoning (FIX-3).
+  # All three agent profiles mount this at /workspace.
+  workspace:
+    driver: local
+
+  # ============================================================
+  # PER-PROFILE TOKEN-STORE VOLUMES (ADR-008 D3, SPEC-21 section 4)
+  # DISTINCT NAMES: one per profile, no cross-mounting.
+  # These are the agent home dirs for token persistence.
+  # The distinct naming is what makes R-m's isolation requirement real (not just stated).
+  # RC-21-2: immutability for managed config files is enforced via MS_RDONLY read-only
+  #          bind mounts (Docker applies bind mounts after named volumes, so the bind mount
+  #          takes precedence; agent UID 1000 gets EPERM on write = MS_RDONLY, not chattr).
+  #          Token files (credentials.json, auth.json) remain agent-user-owned mode 0600
+  #          inside the writable volume (containment is egress, not unreadability, R-c).
+  # ============================================================
+
+  # Copilot token store: mounted at /home/devuser inside devcontainer (copilot profile) ONLY.
+  # Previously named agent-home (renamed to copilot-token-store for explicit isolation).
+  # Re-verify the Copilot CLI's token path (~/.copilot, ~/.config/github-copilot/) is under
+  # this volume mount point (/home/devuser = ~/ for devuser).
+  copilot-token-store:
+    driver: local
+
+  # Claude token store: mounted at /home/devuser/.claude inside devcontainer-claude ONLY.
+  # Claude Code stores its token at ~/.claude/.credentials.json (mode 0600 on Linux).
+  # CLAUDE_CONFIG_DIR=/home/devuser/.claude redirects ALL claude state into this volume.
+  # Source: ADR-008 D3 Verification note (2026-06-17). FIX-F3 (2026-06-20).
+  claude-token-store:
+    driver: local
+
+  # Codex token store: mounted at /home/devuser/.codex inside devcontainer-codex ONLY.
+  # Codex stores its token at ~/.codex/auth.json (PLAINTEXT).
+  # Containment is egress, NOT file permissions (R-c, ADR-008 D3 / SPEC-21 section 4).
+  codex-token-store:
+    driver: local
+
+  # ============================================================
+  # PER-PROFILE CACHE VOLUMES (FIX-3, R-m cross-profile isolation)
+  # ============================================================
+  # Distinct named volumes per profile so an injected agent cannot poison
+  # a package cache that another profile later consumes. Each profile's
+  # npm and general cache is isolated from every other profile's cache.
+  # Workspace stays the one deliberate cross-profile shared surface (R-m).
+  agent-npm-cache-copilot:
+    driver: local
+  agent-cache-copilot:
+    driver: local
+  agent-npm-cache-claude:
+    driver: local
+  agent-cache-claude:
+    driver: local
+  agent-npm-cache-codex:
+    driver: local
+  agent-cache-codex:
+    driver: local
+
+  # ITEM 14: Named volume for Verdaccio npm package cache.
+  verdaccio-storage:
+    driver: local
+  # ITEM 14: Named volume for devpi PyPI cache.
+  devpi-storage:
+    driver: local

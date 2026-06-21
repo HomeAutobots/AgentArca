@@ -1,0 +1,140 @@
+# src/detect/auditd.rules
+# Full auditd ruleset for the Copilot dev container hardening stack.
+# Item 13, ADR-007 D2d, SPEC-07 section 2d + section 10-B.
+#
+# DEPLOYMENT NOTE (critical - read before deploying):
+#   auditd is a HOST/VM-LEVEL control. The hardened dev container has cap_drop:ALL
+#   which removes CAP_AUDIT_CONTROL and CAP_AUDIT_READ. auditd CANNOT run inside
+#   the dev container. It runs on the Linux host (or the Docker Desktop LinuxKit VM).
+#
+#   This file is a HOST-SIDE artifact. Deploy it to:
+#     - A Linux host: copy to /etc/audit/rules.d/copilot.rules and run:
+#         augenrules --load   (or auditctl -R /path/to/auditd.rules)
+#     - Docker Desktop (macOS): the LinuxKit VM is the host. Injecting rules into
+#       LinuxKit requires a privileged container that can access /proc/1/ns/net.
+#       This is a REQUIRES-LINUX-HOST constraint. On macOS Docker Desktop, auditd
+#       in the LinuxKit VM is not directly configurable without VM-level access.
+#       Mark as REQUIRES-LINUX-HOST for production deployment.
+#
+#   The in-container side of the auditd story:
+#     - The container CANNOT load, unload, or modify audit rules (no CAP_AUDIT_CONTROL).
+#     - The host auditd's rules apply to all namespaced processes (the container's PIDs
+#       are visible to the host kernel and subject to host audit rules).
+#     - The -e 2 immutable flag prevents any process (including a root-in-container
+#       process that escapes) from unloading the host ruleset without rebooting the host.
+#
+#   AC-13-N03 verification: confirmed by cap_drop:ALL (no CAP_AUDIT_CONTROL in the
+#   container's bounding set). Any auditctl command inside the container returns EPERM.
+#   The -e 2 exercise (auditctl -D fails EVEN with in-container root) requires running
+#   auditctl on a Linux host with the rules loaded. REQUIRES-LINUX-HOST.
+#
+# Performance: ~5-10% CPU overhead per Area 7 Section 2. Accepted at the runc tier.
+# Source: Area 7 Section 2/4, ADR-007 D2d, SPEC-07 section 2d.
+# Syntax: verified against auditd 3.0.x rule syntax (auditctl man page).
+# Re-verify against the auditd version on the Linux host before deploying.
+
+# ============================================================
+# SECTION 1: Kernel-level process execution logging (procmon)
+# ============================================================
+# Records EVERY process execution with full argv at the kernel level.
+# This is the authoritative ground truth: cannot be cleared by the user,
+# even if the attacker gains in-container root (the rules are loaded at the host level).
+#
+# Flags:
+#   -a always,exit : record on syscall exit (captures the result)
+#   -F arch=b64    : 64-bit syscall table (the standard for amd64/arm64 hosts)
+#   -S execve      : the execve syscall (all process execution goes through this)
+#   -k exec_audit  : log key for these records (used by correlation-query.sh)
+#
+# NOTE: The ADR-007 seed uses "-k procmon" (Section 2d) but the BUILD_PLAN uses
+# "-k exec_audit" (item 13 must-build section). We use exec_audit here to match
+# the SPEC-07 section 10-B must-build and to avoid confusion with the procmon key
+# used elsewhere. correlation-query.sh queries for key=exec_audit.
+# The ADR-007 reference config seed also works fine; the key name is just a label.
+-a always,exit -F arch=b64 -S execve -k exec_audit
+
+# Also log 32-bit execve (for completeness on x86_64 hosts that may run 32-bit bins).
+-a always,exit -F arch=b32 -S execve -k exec_audit
+
+# ============================================================
+# SECTION 2: Canary file read watches
+# ============================================================
+# These rules fire the moment any process OPENS a canary file (at READ time,
+# which is EARLIER than the use-based alert from the token provider).
+# -w : path to watch (inode-based, not name-based; survives renames in-place)
+# -p r : watch for READ access
+# -k canary_read : log key (used by AL-01 alert rule and correlation-query.sh)
+#
+# Canary paths (per SPEC-07 section 2e, section A5, and OI-10-A finding):
+#
+# Path 1: Fake AWS credentials (most common agent-targeted bait).
+-w /home/devuser/.aws/credentials -p r -k canary_read
+
+# Path 2: Fake .env file (plausible dev workspace credential store).
+-w /home/devuser/.env.canary -p r -k canary_read
+
+# Path 3: Copilot CLI token file (OI-10-A: confirmed real token location).
+# This is the highest-value canary: if the agent reads this file, it is
+# specifically targeting the Copilot token (Comment-and-Control exfil vector).
+# The auditd -w watch fires at READ (before any network attempt).
+-w /home/devuser/.config/github-copilot/hosts.json -p r -k canary_read
+
+# Path 4: Alternate Copilot token location (OI-10-A finding, older CLI versions).
+-w /home/devuser/.copilot/hosts.json -p r -k canary_read
+
+# Path 5: Tokenized ops runbook (plausible document with embedded token string).
+-w /workspace/docs/ops-runbook.md -p r -k canary_read
+
+# Path 6: Fake .netrc (credential store for git/curl basic auth).
+-w /home/devuser/.netrc -p r -k canary_read
+
+# ============================================================
+# SECTION 3: High-signal command execution watches
+# ============================================================
+# Watch for specific high-signal commands that an injected agent might run.
+# These complement the procmon execve rule (which catches everything) by
+# providing distinct log keys for the AL-05 alert rule.
+#
+# Firewall/audit manipulation attempts (will fail with EPERM due to cap_drop:ALL
+# and -e 2, but the ATTEMPT is the signal).
+-a always,exit -F arch=b64 -S execve -F exe=/usr/sbin/iptables -k firewall_tamper
+-a always,exit -F arch=b64 -S execve -F exe=/usr/sbin/ip6tables -k firewall_tamper
+-a always,exit -F arch=b64 -S execve -F exe=/usr/sbin/nft -k firewall_tamper
+-a always,exit -F arch=b64 -S execve -F exe=/usr/sbin/auditctl -k audit_tamper
+
+# ============================================================
+# SECTION 4: Boundary-config file write watches
+# ============================================================
+# Watch for write attempts on boundary-config files.
+# These should be rejected by the read-only mount (MS_RDONLY) and the PreToolUse hook,
+# but the attempt itself at the kernel level is a signal.
+-w /workspace/.github/hooks -p wa -k boundary_config_write
+-w /workspace/.vscode/settings.json -p wa -k boundary_config_write
+-w /workspace/.vscode/mcp.json -p wa -k boundary_config_write
+
+# ============================================================
+# SECTION 5: auditd configuration
+# ============================================================
+# Log size and rotation settings that work with the remote-forwarding setup.
+# These are inline as -b (backlog) and -f (failure) settings.
+#
+# Backlog: max number of outstanding audit records (increase for busy hosts).
+-b 8192
+
+# Failure mode 1: lose a record rather than panic the system (appropriate for
+# a dev environment; for production, set -f 2 to panic on audit failure).
+-f 1
+
+# ============================================================
+# SECTION 6: IMMUTABLE FLAG (-e 2)
+# ============================================================
+# This MUST be the LAST LINE in the file.
+# With -e 2, the ruleset cannot be unloaded without a reboot.
+# auditctl -D will fail with EPERM even for root.
+# HOWEVER: if auditd cannot apply this flag (e.g. because the kernel was
+# compiled without CONFIG_AUDIT_ARCH), the rules still load minus the flag.
+# The remote-forwarding (audisp-remote) remains operational regardless of -e 2.
+#
+# On the LinuxKit VM (Docker Desktop macOS), -e 2 behavior requires testing on
+# the actual VM kernel. REQUIRES-LINUX-HOST for definitive -e 2 proof.
+-e 2
