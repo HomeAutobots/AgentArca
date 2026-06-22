@@ -1,0 +1,123 @@
+name: ci
+
+# Static security + quality scans. Fast, runs on every PR and on push to main.
+# The heavy docker acceptance/containment suite lives in nightly.yml (schedule + manual).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ShellCheck (error severity)
+        uses: ludeeus/action-shellcheck@master
+        env:
+          SHELLCHECK_OPTS: -S error
+        with:
+          severity: error
+          # follow `source` directives where possible; don't fail on unfollowable ones
+          check_together: 'yes'
+
+  hadolint:
+    name: hadolint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install hadolint
+        run: |
+          set -euo pipefail
+          sudo curl -fsSL -o /usr/local/bin/hadolint \
+            https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64
+          sudo chmod +x /usr/local/bin/hadolint
+          hadolint --version
+      - name: Lint Dockerfiles (fail on error-level only)
+        run: |
+          set -uo pipefail
+          mapfile -t dfs < <(find . -type f \( -iname 'Dockerfile' -o -iname 'Dockerfile.*' \) -not -path './.git/*')
+          echo "Found ${#dfs[@]} Dockerfile(s)"
+          rc=0
+          for d in "${dfs[@]}"; do
+            echo "==== $d ===="
+            hadolint --failure-threshold error "$d" || rc=1
+          done
+          exit $rc
+
+  compose-validate:
+    name: compose-validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Render + validate compose for every profile
+        run: |
+          set -euo pipefail
+          # satisfy single-key interpolation with placeholder values (no real secrets)
+          cp .env.example .env
+          for p in copilot claude codex; do
+            echo "==== profile: $p ===="
+            docker compose --profile "$p" config >/dev/null
+          done
+          echo "==== discovery compose ===="
+          docker compose -f docker-compose.discovery.yml config >/dev/null
+          rm -f .env
+
+  secret-scan:
+    name: secret-scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # scan full history
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          VER="$(curl -fsSL https://api.github.com/repos/gitleaks/gitleaks/releases/latest | jq -r .tag_name | sed 's/^v//')"
+          curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${VER}/gitleaks_${VER}_linux_x64.tar.gz" -o gl.tgz
+          tar -xzf gl.tgz gitleaks
+          sudo install gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+      - name: Scan for committed secrets
+        run: gitleaks detect --source . --redact --verbose --no-banner
+
+  trivy:
+    name: trivy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install trivy
+        run: |
+          set -euo pipefail
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
+          trivy --version
+      - name: IaC misconfig scan (Dockerfiles, compose)
+        run: trivy config . --severity HIGH,CRITICAL --exit-code 1 --no-progress
+      - name: Filesystem vuln + secret scan
+        run: trivy fs . --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 --no-progress
+
+  mcp-gates:
+    name: mcp-gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: sudo apt-get update -qq && sudo apt-get install -y jq python3-yaml
+      - name: MCP supply-chain scan (no npx/uvx runtime-fetch)
+        run: bash ci/mcp-supply-chain-scan.sh
+      - name: MCP composability gate (zero-server default fails closed)
+        run: |
+          set -euo pipefail
+          for p in .mcp.json src/.vscode/mcp.json; do
+            echo "==== composability gate: $p ===="
+            MCP_JSON_PATH="$p" bash ci/mcp-composability-gate.sh
+          done

@@ -1,0 +1,74 @@
+name: nightly-suite
+
+# Heavy, docker-based credential-independent regression: builds all three profile
+# stacks and runs the per-profile acceptance + containment suites. Slow and
+# resource-heavy, so it runs on a schedule (not per-PR) and on manual dispatch.
+# Credential-dependent ACs (live agent auth, golden-path inference) are SKIPPED.
+
+on:
+  schedule:
+    - cron: '0 7 * * *'   # 07:00 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-suite
+  cancel-in-progress: true
+
+jobs:
+  acceptance:
+    name: acceptance (acc25 + acc15 golden-path)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Placeholder env (no real secrets; cred-dependent ACs skip)
+        run: cp .env.example .env
+      - name: Run per-profile acceptance suite
+        run: bash tests/acceptance/run-profiles.sh
+      - name: Assert no acceptance failures
+        if: always()
+        run: |
+          set -uo pipefail
+          shopt -s nullglob
+          fails=0
+          for log in tests/acceptance/results/*.log; do
+            if grep -qiE '^FAIL: +[1-9]|RESULT: *FAILED' "$log"; then
+              echo "FAILURES in $log"; fails=1
+            fi
+          done
+          exit $fails
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: acceptance-results
+          path: tests/acceptance/results/
+          if-no-files-found: ignore
+
+  containment:
+    name: containment (rt25 per-profile red-team)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Placeholder env
+        run: cp .env.example .env
+      - name: Run per-profile containment suite
+        run: bash tests/containment/rt25-run-profiles.sh
+      - name: Assert zero breaches
+        if: always()
+        run: |
+          set -uo pipefail
+          csv=tests/containment/results/rt25-results.csv
+          test -f "$csv" || { echo "no results csv"; exit 1; }
+          breaches=$(tail -n +2 "$csv" | awk -F, '$5=="yes"{n++} END{print n+0}')
+          echo "breaches: $breaches"
+          test "$breaches" -eq 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: containment-results
+          path: tests/containment/results/
+          if-no-files-found: ignore
