@@ -1,0 +1,11 @@
+# Trivy ignore: accepted-by-design misconfigurations, path-scoped + justified.
+misconfigurations:
+  - id: AVD-DS-0002
+    paths:
+      - "src/gateway/Dockerfile"
+    statement: >-
+      The gateway sidecar runs as root by design: it is the privileged egress
+      boundary component that manages iptables (NET_ADMIN) and Squid at runtime
+      (ADR-002). The dev containers, which run untrusted agent code, are non-root
+      and cap-dropped. Root here is confined to the firewall sidecar, not the
+      agent workload.

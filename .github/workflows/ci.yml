@@ -67,9 +67,9 @@ jobs:
           for p in copilot claude codex; do
             echo "==== profile: $p ===="
             docker compose --profile "$p" config >/dev/null
+            echo "==== profile: $p + discovery overlay ===="
+            docker compose -f docker-compose.yml -f docker-compose.discovery.yml --profile "$p" config >/dev/null
           done
-          echo "==== discovery compose ===="
-          docker compose -f docker-compose.discovery.yml config >/dev/null
           rm -f .env
 
   secret-scan:
@@ -88,7 +88,7 @@ jobs:
           sudo install gitleaks /usr/local/bin/gitleaks
           gitleaks version
       - name: Scan for committed secrets
-        run: gitleaks detect --source . --redact --verbose --no-banner
+        run: gitleaks detect --source . --config .gitleaks.toml --redact --verbose --no-banner
 
   trivy:
     name: trivy
@@ -101,9 +101,10 @@ jobs:
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
           trivy --version
       - name: IaC misconfig scan (Dockerfiles, compose)
-        run: trivy config . --severity HIGH,CRITICAL --exit-code 1 --no-progress
+        run: trivy config . --severity HIGH,CRITICAL --exit-code 1 --ignorefile .trivyignore.yaml
       - name: Filesystem vuln + secret scan
-        run: trivy fs . --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 --no-progress
+        # canary-placement.sh deliberately contains fake secret-looking honeytokens
+        run: trivy fs . --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 --skip-files src/detect/canary-placement.sh
 
   mcp-gates:
     name: mcp-gates

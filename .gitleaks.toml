@@ -1,0 +1,21 @@
+title = "AgentArca gitleaks config"
+
+# Start from gitleaks' built-in ruleset, then allowlist the project's
+# INTENTIONAL decoys and config keywords that are not real secrets.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Intentional honeytokens and config directives (not real secrets)"
+# match the regexes below against the whole line, not just the captured secret
+regexTarget = "line"
+paths = [
+  # The detection arm deliberately plants fake secret-looking canary tokens to
+  # catch exfiltration. Every "secret" in this file is a decoy by design.
+  '''src/detect/canary-placement\.sh''',
+]
+regexes = [
+  # rsyslog TLS auth-mode directive (e.g. StreamDriverAuthMode="x509/name"),
+  # a config keyword, not an API key.
+  '''StreamDriverAuthMode''',
+]
