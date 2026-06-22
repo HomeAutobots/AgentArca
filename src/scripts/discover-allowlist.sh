@@ -1,160 +1,120 @@
 #!/usr/bin/env bash
 # src/scripts/discover-allowlist.sh
-# Empirical allowlist discovery procedure for per-agent allowlist fragments.
-# SPEC-20 section 7: run this to observe SNIs for claude or codex profiles,
-# then update the relevant allowlist fragment with the discovered hosts.
+# Empirical allowlist discovery for per-agent allowlist fragments.
+# SPEC-20 section 7; ADR-002 D4 (empirical-discovery methodology).
+#
+# UPDATED 2026-06-22 for the F2 per-profile-gateway topology. The agent CLI lives in the
+# profile's DEVCONTAINER (<agent>-devcontainer), not in a bare shell, and each profile has
+# its own gateway (<agent>-gateway). This matches the manually-validated Codex discovery run
+# of 2026-06-22 (the pre-F2 version targeted a single `gateway` / `copilot-gateway` and a bare
+# `discovery` ubuntu shell, neither of which fits the per-profile build).
 #
 # USAGE:
-#   bash src/scripts/discover-allowlist.sh claude    # discover for Claude Code profile
-#   bash src/scripts/discover-allowlist.sh codex     # discover for Codex CLI profile
-#   bash src/scripts/discover-allowlist.sh copilot   # (informational; copilot is already locked)
+#   bash src/scripts/discover-allowlist.sh <copilot|claude|codex>
 #
 # HOW IT WORKS:
-#   1. Starts the stack with the discovery overlay (splice-ALL mode; nothing blocked).
-#   2. Spawns an interactive shell in the gateway netns.
-#   3. You authenticate and run a representative workflow for the agent.
-#   4. After exit, the gateway's Squid access.log is harvested and unique SNIs extracted.
-#   5. You review the SNIs and update the agent's fragment.
-#   6. Stop the discovery stack and re-run with the production profile to validate.
+#   1. Brings up the agent's FULL profile (devcontainer + gateway + caches) with the discovery
+#      overlay, which swaps squid.conf for squid-discovery.conf (splice-ALL: nothing is blocked,
+#      every SNI is logged).
+#   2. You authenticate and run a representative workflow INSIDE <agent>-devcontainer (HTTPS_PROXY
+#      is preset to the gateway). Instructions are printed per agent.
+#   3. Press ENTER; the script harvests unique SNIs from the agent's gateway access.log.
+#   4. You review the hosts and lock src/gateway/squid-allowlist.d/<agent>.conf.
+#   5. The discovery stack is torn down.
 #
 # PREREQUISITES:
-#   - Docker + docker compose installed and running.
-#   - src/gateway/discovery/squid-discovery.conf exists (from item 08).
-#   - AGENT auth credentials available in the shell environment.
+#   - Docker + docker compose running.
+#   - Profile mutual exclusion (invariant 9): no OTHER agent profile may be up. If one is, bring
+#     it down first: docker compose --profile <other> down  (named volumes persist).
+#   - Agent credentials: you authenticate interactively in step 2.
 #
-# PRODUCED OUTPUT:
-#   - /tmp/discovery-snIs-<AGENT>.txt: unique SNIs observed during the session.
-#   - Console instructions for updating src/gateway/squid-allowlist.d/<AGENT>.conf.
-#
-# SOURCE: SPEC-20 section 7; ADR-002 D4 (empirical-discovery methodology).
-# ANALOG: This is the per-agent equivalent of the OI-08-C Copilot discovery run.
+# IMPORTANT: the discovery gateway does NOT enforce the allowlist (splice-all). Do not run this
+# against secrets you would not expose to every host the workflow happens to contact.
 
 set -euo pipefail
 
 AGENT="${1:-}"
-
 case "$AGENT" in
   copilot|claude|codex) ;;
-  "")
-    echo "USAGE: $0 <copilot|claude|codex>" >&2
-    exit 1
-    ;;
-  *)
-    echo "ERROR: Unknown agent '$AGENT'. Must be one of: copilot claude codex" >&2
-    exit 1
-    ;;
+  "") echo "USAGE: $0 <copilot|claude|codex>" >&2; exit 1 ;;
+  *)  echo "ERROR: unknown agent '$AGENT' (want copilot|claude|codex)" >&2; exit 1 ;;
 esac
 
-echo "[discover] === Allowlist discovery for agent: ${AGENT} ==="
-echo "[discover] This will start the gateway in splice-ALL mode (nothing blocked)."
-echo "[discover] All SNIs the ${AGENT} workflow contacts will be logged."
-echo "[discover] IMPORTANT: Do NOT run this with production credentials in a secure environment."
-echo "[discover] The discovery gateway does not enforce the allowlist."
+GATEWAY="${AGENT}-gateway"
+DEVC="${AGENT}-devcontainer"
+COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.discovery.yml --profile "$AGENT")
+SNI_OUTPUT="/tmp/discovery-snis-${AGENT}.txt"
+
+echo "[discover] === Allowlist discovery for agent: ${AGENT} (splice-ALL observe mode) ==="
+echo "[discover] The discovery gateway does NOT enforce the allowlist. Do not use secrets you"
+echo "[discover] would not expose to arbitrary hosts. Ensure no other profile is running."
 echo ""
+echo "[discover] Bringing up the ${AGENT} profile with the discovery overlay..."
+"${COMPOSE[@]}" up -d
 
-# Step 1: Start gateway in discovery mode.
-# The discovery overlay overrides squid.conf with squid-discovery.conf (splice-all).
-# We also set SQUID_AGENT_FRAGMENT to the target agent's fragment so the production
-# fragment is still copied (though squid.conf is overridden by the discovery conf,
-# the entrypoint fragment selection still runs and is visible in the log).
-echo "[discover] Starting gateway in discovery mode..."
-SQUID_AGENT_FRAGMENT="${AGENT}.conf" \
-docker compose \
-    -f docker-compose.yml \
-    -f docker-compose.discovery.yml \
-    up -d gateway
-
-echo "[discover] Waiting for gateway to be healthy..."
-for i in $(seq 1 30); do
-    STATUS=$(docker inspect --format='{{.State.Health.Status}}' copilot-gateway 2>/dev/null || echo "starting")
-    if [ "$STATUS" = "healthy" ]; then
-        echo "[discover] Gateway is healthy."
-        break
-    fi
-    if [ "$i" -eq 30 ]; then
-        echo "[discover] ERROR: Gateway did not become healthy after 30s. Check logs:" >&2
-        docker logs copilot-gateway 2>&1 | tail -20 >&2
-        exit 1
-    fi
-    sleep 1
+echo "[discover] Waiting for ${GATEWAY} to be healthy..."
+for i in $(seq 1 60); do
+  STATUS="$(docker inspect --format='{{.State.Health.Status}}' "$GATEWAY" 2>/dev/null || echo starting)"
+  [ "$STATUS" = "healthy" ] && { echo "[discover] ${GATEWAY} healthy."; break; }
+  if [ "$i" -eq 60 ]; then
+    echo "[discover] ERROR: ${GATEWAY} not healthy after 60s. Logs:" >&2
+    docker logs "$GATEWAY" 2>&1 | tail -20 >&2
+    exit 1
+  fi
+  sleep 1
 done
 
-# Step 2: Start the discovery container (ubuntu shell in gateway netns).
-echo "[discover] Starting discovery container (interactive shell)..."
-echo "[discover] === INTERACTIVE SESSION ==="
-echo "[discover] You are now in the discovery container's shell."
-echo "[discover] The gateway is in splice-ALL mode; all your HTTPS traffic is logged."
-echo "[discover] Run your ${AGENT} workflow:"
+echo ""
+echo "[discover] === RUN A REPRESENTATIVE WORKFLOW (in a separate terminal) ==="
+echo "[discover] The agent CLI lives in ${DEVC}; HTTPS_PROXY is preset so all traffic is logged."
 case "$AGENT" in
   claude)
-    echo "[discover]   export HTTPS_PROXY=http://localhost:8080"
-    echo "[discover]   export HTTP_PROXY=http://localhost:8080"
-    echo "[discover]   claude login  (or set ANTHROPIC_API_KEY)"
-    echo "[discover]   claude --help"
-    echo "[discover]   # run a representative task"
+    echo "[discover]   docker exec -it ${DEVC} claude   # or mint a narrow token on the HOST: claude setup-token"
+    echo "[discover]   # then run a representative task that triggers inference"
     ;;
   codex)
-    echo "[discover]   export HTTPS_PROXY=http://localhost:8080"
-    echo "[discover]   export HTTP_PROXY=http://localhost:8080"
-    echo "[discover]   codex login  (or set OPENAI_API_KEY)"
-    echo "[discover]   codex --help"
-    echo "[discover]   # run a representative task"
+    echo "[discover]   # API-key path: put OPENAI_API_KEY in the repo-root .env BEFORE 'up' (no login step)."
+    echo "[discover]   # ChatGPT-subscription path (device code) MUST run in a real TTY terminal:"
+    echo "[discover]   docker exec -it ${DEVC} codex login --device-auth"
+    echo "[discover]     # NOTE: codex buffers its output without a TTY, so the device URL + code do"
+    echo "[discover]     # NOT appear from a non-TTY exec (or the editor '!' box). Use a real terminal."
+    echo "[discover]   docker exec ${DEVC} bash -lc 'cd /workspace && codex exec --skip-git-repo-check \"say hello\" </dev/null'"
     ;;
   copilot)
-    echo "[discover]   export HTTPS_PROXY=http://localhost:8080"
-    echo "[discover]   gh auth login --web"
-    echo "[discover]   gh copilot suggest 'list files'"
+    echo "[discover]   docker exec -it ${DEVC} gh auth login"
+    echo "[discover]   docker exec -it ${DEVC} gh copilot suggest 'list files'"
     ;;
 esac
-echo "[discover] When done, type 'exit' to end the session and harvest SNIs."
+
 echo ""
+read -r -p "[discover] Press ENTER when the workflow is done to harvest SNIs... " _ || true
 
-SQUID_AGENT_FRAGMENT="${AGENT}.conf" \
-docker compose \
-    -f docker-compose.yml \
-    -f docker-compose.discovery.yml \
-    run --rm \
-    --service-ports \
-    discovery \
-    /bin/bash || true
+echo "[discover] === Harvesting hosts from ${GATEWAY} access.log ==="
+# The gateway access.log is proxy:proxy 0640 and root is restricted in the hardened gateway,
+# so read it as the 'proxy' user. For CONNECT lines the target (host:port) is field 7 of the
+# copilot_combined logformat; we strip :443 and de-duplicate.
+docker exec -u proxy "$GATEWAY" sh -c \
+  "awk '/CONNECT/ {print \$7}' /var/log/squid/access.log | sed 's/:443\$//' | sort -u" \
+  > "$SNI_OUTPUT" 2>/dev/null || \
+  echo "(could not harvest; try: docker exec -u proxy ${GATEWAY} cat /var/log/squid/access.log)" > "$SNI_OUTPUT"
 
-# Step 3: Harvest SNIs from Squid access.log.
-echo ""
-echo "[discover] === Harvesting SNIs from Squid access.log ==="
-SNI_OUTPUT="/tmp/discovery-snIs-${AGENT}.txt"
-docker exec copilot-gateway \
-    sh -c 'grep CONNECT /var/log/squid/access.log 2>/dev/null | awk '"'"'{print $7}'"'"' | sort -u' \
-    > "$SNI_OUTPUT" 2>/dev/null || \
-docker exec copilot-gateway \
-    sh -c 'cat /var/log/squid/access.log 2>/dev/null | grep -oE "[A-Za-z0-9._-]+\.[a-z]{2,}" | sort -u' \
-    > "$SNI_OUTPUT" 2>/dev/null || \
-    echo "(could not harvest SNIs from gateway log; check docker exec access)" > "$SNI_OUTPUT"
-
-echo "[discover] Discovered SNIs saved to: ${SNI_OUTPUT}"
-echo "[discover] Contents:"
+echo "[discover] Hosts saved to ${SNI_OUTPUT}:"
 cat "$SNI_OUTPUT"
 
 echo ""
 echo "[discover] === Next steps ==="
-echo "[discover] 1. Review the SNI list above."
-echo "[discover] 2. For each SNI that is required for ${AGENT} operation:"
-echo "[discover]    Add it to: src/gateway/squid-allowlist.d/${AGENT}.conf"
-echo "[discover]    Format: acl allowed_SNI ssl::server_name <hostname>"
-echo "[discover] 3. Annotate each entry as OBSERVED-<DATE> or DOCUMENTED-not-observed."
-echo "[discover] 4. Comment out Section C / Section B hosts that are NOT required in steady-state."
-echo "[discover] 5. Stop the discovery stack:"
-echo "[discover]    docker compose -f docker-compose.yml -f docker-compose.discovery.yml down"
-echo "[discover] 6. Re-test with the production profile:"
-echo "[discover]    docker compose --profile ${AGENT} up"
-echo "[discover] 7. When satisfied, update the STATUS line in ${AGENT}.conf:"
-echo "[discover]    STATUS: LOCKED <DATE> (empirical discovery complete)"
-echo "[discover] 8. Re-generate the MCP integrity manifest if config.toml changed:"
-echo "[discover]    bash src/managed-mcp/generate-mcp-integrity-manifest.sh"
-
+echo "[discover] 1. Separate AGENT traffic from cache infra: npm/pypi registry hosts arrive via the"
+echo "[discover]    caches (cache-net source) and are covered by base.conf, NOT ${AGENT}.conf."
+echo "[discover] 2. For each host required for ${AGENT} steady-state, ensure it is in"
+echo "[discover]    src/gateway/squid-allowlist.d/${AGENT}.conf  (acl allowed_SNI ssl::server_name <host>)."
+echo "[discover] 3. Drop login-only / non-essential hosts where the auth path allows; document the choice."
+echo "[discover] 4. Validate under ENFORCEMENT (production profile, allowlist on):"
+echo "[discover]      ${COMPOSE[*]} down"
+echo "[discover]      docker compose --profile ${AGENT} up -d"
+echo "[discover]    confirm the agent works AND non-allowlisted hosts are blocked (HTTP 000)."
+echo "[discover] 5. Update the STATUS line in ${AGENT}.conf to LOCKED <date>."
 echo ""
-echo "[discover] Stopping discovery gateway..."
-docker compose \
-    -f docker-compose.yml \
-    -f docker-compose.discovery.yml \
-    down gateway 2>/dev/null || true
+echo "[discover] Tearing down the discovery stack..."
+"${COMPOSE[@]}" down
+
 echo "[discover] Discovery session complete."
