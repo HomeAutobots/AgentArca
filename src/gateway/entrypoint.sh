@@ -63,9 +63,23 @@ if [ ! -f "$FRAGMENT_SOURCE" ]; then
 fi
 
 echo "[gateway/entrypoint] Selecting agent fragment: ${AGENT_FRAGMENT} -> ${ACTIVE_FRAGMENT}"
+# Idempotent: remove any prior active-agent.conf first. It is chmod 444 below, and under
+# cap_drop ALL there is no CAP_DAC_OVERRIDE, so a plain `cp` over an existing 444 file fails
+# on container RESTART ("Permission denied"). Removing it (a dir-write, which root can do)
+# keeps the copy restart-safe. Without this, any gateway restart bricks the container.
+rm -f "${ACTIVE_FRAGMENT}" 2>/dev/null || true
 cp "${FRAGMENT_SOURCE}" "${ACTIVE_FRAGMENT}"
 chmod 444 "${ACTIVE_FRAGMENT}"
 echo "[gateway/entrypoint] Fragment installed (mode 444, read-only)."
+
+# Point Squid's resolver at GATEWAY_DNS_RESOLVER (default 192.168.65.7 = Docker Desktop;
+# 127.0.0.11 on native Linux via docker-compose.linux.yml). squid.conf is baked into the
+# image, so rewrite the dns_nameservers line at startup to match the L3 firewall resolver.
+GATEWAY_DNS_RESOLVER="${GATEWAY_DNS_RESOLVER:-192.168.65.7}"
+if [ -w /etc/squid/squid.conf ]; then
+  sed -i "s/^dns_nameservers .*/dns_nameservers ${GATEWAY_DNS_RESOLVER}/" /etc/squid/squid.conf
+  echo "[gateway/entrypoint] Squid dns_nameservers set to ${GATEWAY_DNS_RESOLVER}."
+fi
 
 # ============================================================
 # STEP 1: Initialize the firewall.
