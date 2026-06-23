@@ -55,6 +55,9 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 COMPOSE_FILE="${PROJECT_ROOT}/docker-compose.yml"
 OVERRIDE_FILE="${SCRIPT_DIR}/compose.test-override.yml"
 PROJECT="acc15"
+# Native-Linux DNS overlay (docker-compose.linux.yml): layered automatically on Linux, inert on macOS.
+LINUX_OVERLAY=()
+if [ "$(uname -s)" = "Linux" ]; then LINUX_OVERLAY=(-f "${PROJECT_ROOT}/docker-compose.linux.yml"); fi
 LOG_DIR="${SCRIPT_DIR}/results"
 TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)
 LOG_FILE="${LOG_DIR}/run-${TIMESTAMP}.log"
@@ -110,7 +113,7 @@ teardown() {
   if [ "${STACK_BROUGHT_UP}" -eq 1 ] && [ "${NO_TEARDOWN}" -eq 0 ]; then
     log "Tearing down acc15 stack..."
     docker compose -p "${PROJECT}" \
-      -f "${COMPOSE_FILE}" \
+      -f "${COMPOSE_FILE}" "${LINUX_OVERLAY[@]}" \
       -f "${OVERRIDE_FILE}" \
       --profile copilot \
       down -v 2>&1 | tee -a "${LOG_FILE}" || true
@@ -175,7 +178,7 @@ if [ "${SKIP_STACK}" -eq 0 ]; then
   if [ "${NO_BUILD}" -eq 0 ]; then
     log "Building images (--no-build to skip)..."
     docker compose -p "${PROJECT}" \
-      -f "${COMPOSE_FILE}" \
+      -f "${COMPOSE_FILE}" "${LINUX_OVERLAY[@]}" \
       -f "${OVERRIDE_FILE}" \
       --profile copilot \
       build 2>&1 | tee -a "${LOG_FILE}"
@@ -191,7 +194,7 @@ if [ "${SKIP_STACK}" -eq 0 ]; then
 
   log "Starting stack..."
   docker compose -p "${PROJECT}" \
-    -f "${COMPOSE_FILE}" \
+    -f "${COMPOSE_FILE}" "${LINUX_OVERLAY[@]}" \
     -f "${OVERRIDE_FILE}" \
     --profile copilot \
     up -d 2>&1 | tee -a "${LOG_FILE}"
@@ -211,7 +214,7 @@ if [ "${SKIP_STACK}" -eq 0 ]; then
   WAITED=0
   while true; do
     GW_HEALTH=$(docker compose -p "${PROJECT}" \
-      -f "${COMPOSE_FILE}" \
+      -f "${COMPOSE_FILE}" "${LINUX_OVERLAY[@]}" \
       -f "${OVERRIDE_FILE}" \
       --profile copilot \
       ps gateway-copilot --format '{{.Health}}' 2>/dev/null | tr -d '\r' || echo "")
@@ -226,7 +229,7 @@ if [ "${SKIP_STACK}" -eq 0 ]; then
     if [ "${WAITED}" -ge "${TIMEOUT}" ]; then
       log "ERROR: Gateway did not become healthy within ${TIMEOUT}s. Last status: ${GW_HEALTH}"
       docker compose -p "${PROJECT}" \
-        -f "${COMPOSE_FILE}" \
+        -f "${COMPOSE_FILE}" "${LINUX_OVERLAY[@]}" \
         -f "${OVERRIDE_FILE}" \
         --profile copilot \
         logs --tail=50 2>&1 | tee -a "${LOG_FILE}" || true
