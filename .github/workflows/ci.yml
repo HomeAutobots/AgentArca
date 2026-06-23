@@ -20,7 +20,7 @@ jobs:
     name: shellcheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: ShellCheck (error severity)
         uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38 # 2.0.0
         env:
@@ -34,7 +34,7 @@ jobs:
     name: hadolint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Install hadolint
         run: |
           set -euo pipefail
@@ -58,7 +58,7 @@ jobs:
     name: compose-validate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Render + validate compose for every profile
         run: |
           set -euo pipefail
@@ -76,7 +76,7 @@ jobs:
     name: secret-scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0   # scan full history
       - name: Install gitleaks
@@ -94,7 +94,7 @@ jobs:
     name: trivy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Install trivy
         run: |
           set -euo pipefail
@@ -110,7 +110,7 @@ jobs:
     name: mcp-gates
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Install deps
         run: sudo apt-get update -qq && sudo apt-get install -y jq python3-yaml
       - name: MCP supply-chain scan (no npx/uvx runtime-fetch)
