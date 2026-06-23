@@ -182,6 +182,7 @@ run_profile() {
   # 5. Run the attack scenarios.
   bash "$HERE/rt25-scenario-profile-containment.sh"
   bash "$HERE/rt25-scenario-selfcheck.sh"
+  bash "$HERE/rt25-scenario-local-overlay-mask.sh"
 
   # 6. Teardown this profile before the next.
   teardown_one "$profile"

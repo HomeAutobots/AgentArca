@@ -1,0 +1,42 @@
+# config/allowlist.local.d/overrides.conf.example
+#
+# DEVELOPER-LOCAL egress allowlist extension for AgentArca. TEMPLATE / EXAMPLE ONLY.
+#
+# AgentArca ships a locked base allowlist (baked into the gateway image: base.conf +
+# the active profile's copilot/claude/codex.conf). This file lets a developer ADD extra
+# hosts the active agent may reach, WITHOUT editing the shipped config and WITHOUT a
+# Docker or gateway restart. Your additions are LOCAL to your machine and are NOT committed
+# (config/allowlist.local.d/*.conf is gitignored).
+#
+# ── HOW TO USE ─────────────────────────────────────────────────────────────────────
+# Easiest (recommended) — use the helper, which validates the host, writes overrides.conf,
+# and hot-applies it to the running gateway:
+#
+#     src/scripts/allowlist-local.sh add registry.example.com
+#     src/scripts/allowlist-local.sh list
+#     src/scripts/allowlist-local.sh remove registry.example.com
+#
+# Manual — copy this template once, edit it, then reload:
+#
+#     cp config/allowlist.local.d/overrides.conf.example config/allowlist.local.d/overrides.conf
+#     # add one ACL line per host (see format below), then:
+#     src/scripts/allowlist-local.sh reload          # runs `squid -k reconfigure`
+#
+# Note: the file is bind-mounted READ-ONLY into the gateway. The agent inside the container
+# cannot edit it or reconfigure Squid — only you, on the host, can. Each host you add widens
+# the egress (exfiltration) surface, so add the narrowest host that works and prefer running
+# unknown hosts through `src/scripts/discover-allowlist.sh` first to see what is really needed.
+#
+# ── LINE FORMAT ────────────────────────────────────────────────────────────────────
+# One Squid SNI ACL per host. Exact host:
+#
+#     acl allowed_SNI ssl::server_name api.example.com
+#
+# Subdomain wildcard (leading dot = "this domain and all subdomains" — broader, use sparingly):
+#
+#     acl allowed_SNI ssl::server_name .internal.example.com
+#
+# (Uncomment / add your lines below. This .example file itself is never loaded — only
+#  files literally named *.conf in this directory are included by the gateway.)
+#
+# acl allowed_SNI ssl::server_name api.example.com

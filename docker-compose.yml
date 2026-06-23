@@ -150,6 +150,14 @@ x-gateway-base: &gateway-base
     retries: 5
     start_period: 45s
   restart: unless-stopped
+  # Developer-local egress allowlist extension (operator-controlled, NOT committed).
+  # READ-ONLY: the container (and thus the agent sharing this netns) cannot write it; only the
+  # HOST developer edits ./config/allowlist.local.d (via src/scripts/allowlist-local.sh). squid.conf
+  # includes /etc/squid/local.d/*.conf, so dropped-in `acl allowed_SNI ...` lines extend the baked
+  # allowlist and hot-apply via `squid -k reconfigure` (no restart). Empty in the shipped default.
+  # All three gateway services inherit this mount via the <<: *gateway-base merge.
+  volumes:
+    - ./config/allowlist.local.d:/etc/squid/local.d:ro
   # Port forward for dev servers must be declared here (gateway owns the netns).
   # Uncomment and adjust for any dev server port forwarding:
   # ports:
