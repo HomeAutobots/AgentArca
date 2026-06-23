@@ -47,7 +47,10 @@ done
 # Without this flag only verdaccio and devpi started (they have no profiles: tag), gateway-copilot
 # and devcontainer were never created, the health poll returned empty on every iteration,
 # and all live scenarios were skipped after the 30*5s=150s wait.
-COMPOSE=(docker compose -p rt16 -f "$PROJECT_ROOT/docker-compose.yml" -f "$HERE/compose.test-override.yml" --profile copilot)
+# Native-Linux DNS overlay (docker-compose.linux.yml): layered automatically on Linux, inert on macOS.
+LINUX_OVERLAY=()
+if [ "$(uname -s)" = "Linux" ]; then LINUX_OVERLAY=(-f "$PROJECT_ROOT/docker-compose.linux.yml"); fi
+COMPOSE=(docker compose -p rt16 -f "$PROJECT_ROOT/docker-compose.yml" "${LINUX_OVERLAY[@]}" -f "$HERE/compose.test-override.yml" --profile copilot)
 
 teardown() {
   if [ "$KEEP_UP" -eq 1 ]; then

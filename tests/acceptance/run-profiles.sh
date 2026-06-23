@@ -53,6 +53,11 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 COMPOSE_FILE="${PROJECT_ROOT}/docker-compose.yml"
+# Native-Linux DNS overlay (docker-compose.linux.yml): clears the macOS dns: override and
+# points the resolver at the embedded 127.0.0.11. Layered automatically when running on Linux;
+# empty (inert) on macOS. Same pattern as tests/containment/rt25-run-profiles.sh.
+LINUX_OVERLAY=()
+if [ "$(uname -s)" = "Linux" ]; then LINUX_OVERLAY=(-f "${PROJECT_ROOT}/docker-compose.linux.yml"); fi
 # Per-profile overrides use distinct subnets to avoid conflicts with production stack
 OVERRIDE_CLAUDE="${SCRIPT_DIR}/compose.acc25-claude-override.yml"
 OVERRIDE_CODEX="${SCRIPT_DIR}/compose.acc25-codex-override.yml"
@@ -140,7 +145,7 @@ teardown_stack() {
   if [ "${NO_TEARDOWN}" -eq 0 ]; then
     log "Tearing down ${proj} stack..."
     docker compose -p "${proj}" \
-      -f "${COMPOSE_FILE}" \
+      -f "${COMPOSE_FILE}" "${LINUX_OVERLAY[@]}" \
       -f "${override_file}" \
       --profile "${profile}" \
       down -v 2>&1 | tee -a "${LOG_FILE}" || true
@@ -165,7 +170,7 @@ bring_up_stack() {
   if [ "${NO_BUILD}" -eq 0 ]; then
     log "Building ${profile} profile images..."
     docker compose -p "${proj}" \
-      -f "${COMPOSE_FILE}" \
+      -f "${COMPOSE_FILE}" "${LINUX_OVERLAY[@]}" \
       -f "${override_file}" \
       --profile "${profile}" \
       build 2>&1 | tee -a "${LOG_FILE}" || {
@@ -200,7 +205,7 @@ bring_up_stack() {
 
   log "Starting ${proj} stack..."
   docker compose -p "${proj}" \
-    -f "${COMPOSE_FILE}" \
+    -f "${COMPOSE_FILE}" "${LINUX_OVERLAY[@]}" \
     -f "${override_file}" \
     --profile "${profile}" \
     up -d 2>&1 | tee -a "${LOG_FILE}" || {
@@ -213,7 +218,7 @@ bring_up_stack() {
   while true; do
     local gw_health
     gw_health=$(docker compose -p "${proj}" \
-      -f "${COMPOSE_FILE}" \
+      -f "${COMPOSE_FILE}" "${LINUX_OVERLAY[@]}" \
       -f "${override_file}" \
       --profile "${profile}" \
       ps --format json 2>/dev/null | python3 -c "
@@ -238,7 +243,7 @@ for line in sys.stdin:
     if [ "${waited}" -ge "${TIMEOUT}" ]; then
       log "ERROR: gateway did not become healthy within ${TIMEOUT}s for ${proj} (last: ${gw_health})"
       docker compose -p "${proj}" \
-        -f "${COMPOSE_FILE}" \
+        -f "${COMPOSE_FILE}" "${LINUX_OVERLAY[@]}" \
         -f "${override_file}" \
         --profile "${profile}" \
         logs --tail=40 2>&1 | tee -a "${LOG_FILE}" || true
