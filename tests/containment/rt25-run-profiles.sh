@@ -63,6 +63,11 @@ dcsvc_for()     { case "$1" in claude) echo devcontainer-claude;; codex) echo de
 cop_subnet_for(){ case "$1" in claude) echo 10.45.0.0/24;; codex) echo 10.46.0.0/24;; copilot) echo 10.47.0.0/24;; esac; }
 cache_subnet_for(){ case "$1" in claude) echo 10.45.1.0/24;; codex) echo 10.46.1.0/24;; copilot) echo 10.47.1.0/24;; esac; }
 
+# Native-Linux DNS overlay (docker-compose.linux.yml): removes the macOS dns: override and
+# points the resolver at the embedded 127.0.0.11. Layered automatically when running on Linux.
+LINUX_OVERLAY=()
+if [ "$(uname -s)" = "Linux" ]; then LINUX_OVERLAY=(-f "$PROJECT_ROOT/docker-compose.linux.yml"); fi
+
 CURRENT_PROJ=""
 CURRENT_OVERRIDE=""
 CURRENT_PROFILE=""
@@ -82,7 +87,7 @@ teardown_one() {
   # FIX-F2 (2026-06-20): SQUID_AGENT_FRAGMENT no longer needs to be set on the host for teardown
   # (it is hardcoded in the gateway service). The prepended env var was harmless but misleading.
   docker compose -p "$proj" \
-    -f "$PROJECT_ROOT/docker-compose.yml" -f "$override" --profile "$profile" \
+    -f "$PROJECT_ROOT/docker-compose.yml" "${LINUX_OVERLAY[@]}" -f "$override" --profile "$profile" \
     down -v --remove-orphans >/dev/null 2>&1 || true
   docker network rm "${proj}_agent-net" "${proj}_cache-net" >/dev/null 2>&1 || true
   echo "[rt25] $proj teardown complete."
@@ -119,7 +124,7 @@ run_profile() {
 
   # FIX-F2 (2026-06-20): SQUID_AGENT_FRAGMENT is now HARDCODED in each per-profile gateway
   # service (gateway-<profile>). No host-shell export is required anymore.
-  local COMPOSE=(docker compose -p "$proj" -f "$PROJECT_ROOT/docker-compose.yml" -f "$override" --profile "$profile")
+  local COMPOSE=(docker compose -p "$proj" -f "$PROJECT_ROOT/docker-compose.yml" "${LINUX_OVERLAY[@]}" -f "$override" --profile "$profile")
   # Gateway service name for this profile (per-profile gateways, FIX-F2).
   local gw_svc="gateway-${profile}"
 

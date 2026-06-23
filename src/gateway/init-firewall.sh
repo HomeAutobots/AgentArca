@@ -77,9 +77,10 @@ iptables -A INPUT -p tcp --dport 8080 -s 192.168.0.0/16 -j ACCEPT
 #   The compose file also sets dns: [192.168.65.7] so /etc/resolv.conf
 #   uses this address instead of 127.0.0.11.
 #
-# On a native Linux host (not Docker Desktop), replace 192.168.65.7 with
-# 127.0.0.11 (the embedded resolver that works on native Linux).
-DNS_RESOLVER="192.168.65.7"
+# Resolver is configurable via GATEWAY_DNS_RESOLVER (default: Docker Desktop host
+# resolver 192.168.65.7). On native Linux set GATEWAY_DNS_RESOLVER=127.0.0.11 (the
+# embedded resolver, which works on native Linux); docker-compose.linux.yml does this.
+DNS_RESOLVER="${GATEWAY_DNS_RESOLVER:-192.168.65.7}"
 iptables -A OUTPUT -p udp --dport 53 -d "${DNS_RESOLVER}" -j ACCEPT
 iptables -A OUTPUT -p tcp --dport 53 -d "${DNS_RESOLVER}" -j ACCEPT
 
@@ -141,10 +142,17 @@ log "iptables rules programmed. OUTPUT default-DROP is now active."
 # Compose disables IPv6 at the network level, but add ip6tables rules
 # as a defense-in-depth backstop (ADR-002 D5/D6d).
 if command -v ip6tables &>/dev/null; then
+    # Allow IPv6 loopback FIRST (mirrors the IPv4 -o lo / -i lo rules). On native Linux
+    # ::1 exists and Squid's ssl-bump helper IPC (security_file_certgen) binds it; without
+    # this the OUTPUT DROP policy blocks that IPC ("sendto: Operation not permitted") and
+    # Squid never starts. Loopback is never an external exfil path, so this does not weaken
+    # the backstop (external IPv6 egress stays DROPped). On macOS IPv6 is off, so this is inert.
+    ip6tables -A OUTPUT -o lo -j ACCEPT 2>/dev/null || true
+    ip6tables -A INPUT -i lo -j ACCEPT 2>/dev/null || true
     ip6tables -P OUTPUT DROP 2>/dev/null || log "ip6tables OUTPUT policy: failed to set DROP (may not be supported in this environment; compose-level IPv6 disable is the primary control)"
     ip6tables -P INPUT DROP 2>/dev/null || true
     ip6tables -P FORWARD DROP 2>/dev/null || true
-    log "ip6tables default-DROP set (IPv6 backstop)"
+    log "ip6tables default-DROP set (IPv6 backstop; loopback allowed for Squid IPC)"
 else
     log "ip6tables not available; compose-level IPv6 disable is the primary control"
 fi

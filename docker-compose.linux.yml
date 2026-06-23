@@ -1,0 +1,41 @@
+# docker-compose.linux.yml
+# Native-Linux overrides for AgentArca. Layer on top of the base compose:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.linux.yml --profile <agent> up -d
+#
+# Validated on Ubuntu 24.04 / kernel 6.8 / Docker 29 with userns-remap (2026-06-23):
+# claude/codex/copilot all healthy; rt25 containment 108/108 contained, 0 breaches.
+#
+# What this changes and why (none weaken the boundary; they adapt the DNS path to Linux):
+#   - dns: !reset null REMOVES the base `dns: [192.168.65.7]` (the macOS Docker Desktop host
+#     resolver). This is REQUIRED on native Linux and is load-bearing: setting `dns:` makes
+#     Docker configure the embedded resolver's UPSTREAM to that address, so even though Squid
+#     queries 127.0.0.11, that resolver would forward to the unreachable 192.168.65.7 and
+#     every lookup SERVFAILs. Clearing dns: lets the embedded resolver use the host's real
+#     upstreams. (NOTE: `docker compose config` does NOT show !reset's effect in its rendered
+#     output, but it IS applied at runtime - verified: with !reset the gateway resolves and is
+#     healthy; without it, resolution fails.) Do NOT set dns: [127.0.0.11] instead: that makes
+#     the embedded resolver forward to itself (a loop).
+#   - GATEWAY_DNS_RESOLVER=127.0.0.11 points init-firewall.sh's L3 DNS allow and Squid's
+#     dns_nameservers (rewritten by the entrypoint at startup) at the embedded resolver.
+#
+# Also REQUIRED on native Linux, but NOT expressible in compose (host/daemon settings):
+#   - userns-remap: add {"userns-remap":"default"} to /etc/docker/daemon.json and restart
+#     docker. Mandatory on Linux (ADR-004 D2): without the Docker Desktop LinuxKit VM, a
+#     bare-runc escape lands as host root. See docs/runbook.md section 1c.
+#   - The host's own firewall must allow Docker's FORWARD/MASQUERADE for the bridge (default
+#     Docker behavior; a host-hardening tool that sets FORWARD policy DROP breaks egress).
+
+services:
+  gateway-copilot:
+    dns: !reset null
+    environment:
+      GATEWAY_DNS_RESOLVER: "127.0.0.11"
+  gateway-claude:
+    dns: !reset null
+    environment:
+      GATEWAY_DNS_RESOLVER: "127.0.0.11"
+  gateway-codex:
+    dns: !reset null
+    environment:
+      GATEWAY_DNS_RESOLVER: "127.0.0.11"

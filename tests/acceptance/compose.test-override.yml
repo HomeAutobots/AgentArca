@@ -33,7 +33,7 @@
 
 services:
   gateway-copilot:
-    container_name: ""
+    container_name: !reset null
     mem_limit: 2g
     volumes:
       - type: bind
@@ -42,15 +42,15 @@ services:
         read_only: true
 
   devcontainer:
-    container_name: ""
+    container_name: !reset null
     mem_limit: 2g
 
   verdaccio:
-    container_name: ""
+    container_name: !reset null
     mem_limit: 512m
 
   devpi:
-    container_name: ""
+    container_name: !reset null
     mem_limit: 512m
 
 # Mark networks as external: Compose will attach to the pre-created networks
