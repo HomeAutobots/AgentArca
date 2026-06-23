@@ -40,6 +40,10 @@ services:
         source: ./tests/acceptance/fixtures/squid-test-cache-src.conf
         target: /etc/squid/conf.d/squid-test-cache-src.conf
         read_only: true
+      - type: bind
+        source: ./tests/acceptance/fixtures/empty-local.d
+        target: /etc/squid/local.d
+        read_only: true
 
   devcontainer:
     container_name: !reset null

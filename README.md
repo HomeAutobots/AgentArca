@@ -78,6 +78,20 @@ docker exec claude-devcontainer sh -c 'curl --max-time 5 https://example.com'   
 docker exec claude-devcontainer sh -c 'curl -s -o /dev/null -w "%{http_code}\n" https://api.anthropic.com/v1/messages -X POST -d "{}"'   # 401 (routed)
 ```
 
+## Allow extra sites while developing
+
+The shipped allowlist (baked into the gateway image) is intentionally locked. To let the active agent reach an extra host while you work — a private registry, an internal API — add it to a **machine-local, gitignored** overlay and hot-apply it. No rebuild, no `docker compose` restart:
+
+```bash
+src/scripts/allowlist-local.sh add registry.internal.example.com   # validates, adds, reconfigures live
+src/scripts/allowlist-local.sh list                                # show your local additions
+src/scripts/allowlist-local.sh remove registry.internal.example.com
+```
+
+Your additions live in `config/allowlist.local.d/overrides.conf` (gitignored, so they never ship and never affect anyone else) and are bind-mounted **read-only** into the gateway. That read-only mount is the point: the agent shares the gateway's network namespace but cannot edit the file or reconfigure Squid, and it has no `docker.sock` — so widening egress is always an explicit operator action on the host, never something an injected agent can do.
+
+Be honest with yourself about what each addition costs. AgentArca assumes the agent may be prompt-injected; every host you allow is a standing destination that an injected agent can try to exfiltrate to, and detection of that is weak (the gateway access log is in-container and not a tamper-proof record). Because these additions are local and uncommitted, **no one else reviews them** and they do not show up in any audit trail — the running egress posture can quietly differ from the shipped config. So: add the narrowest host that works (prefer an exact host over a `.example.com` subdomain wildcard), remove hosts when you are done with them, and prefer running unknown hosts through `src/scripts/discover-allowlist.sh` first to see what is actually needed. The ergonomic CLI does not make a wide allowlist safe. See `config/allowlist.local.d/overrides.conf.example` for the file format.
+
 ## Tests
 
 Two suites form the regression harness. Re-run them on every upstream agent update, base-image bump, or allowlist change.

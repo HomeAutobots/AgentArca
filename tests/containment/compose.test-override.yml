@@ -39,6 +39,13 @@ services:
   gateway-copilot:
     container_name: !reset null
     mem_limit: 2g
+    # Mask the developer-local allowlist overlay so containment runs against the baked
+    # allowlist only (a dev's ./config/allowlist.local.d cannot hide a boundary failure).
+    volumes:
+      - type: bind
+        source: ./tests/acceptance/fixtures/empty-local.d
+        target: /etc/squid/local.d
+        read_only: true
 
   devcontainer:
     container_name: !reset null

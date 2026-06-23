@@ -9,6 +9,11 @@
 .obsidian/
 **/.DS_Store
 
+# developer-local egress allowlist additions (operator-controlled, machine-local, not shipped).
+# The committed scaffolding (00-local.conf placeholder + overrides.conf.example) is kept;
+# the developer's actual additions in overrides.conf stay local-only.
+/config/allowlist.local.d/overrides.conf
+
 # transient per-run test logs/summaries (keep canonical *-results.csv evidence)
 tests/*/results/run-*.log
 tests/*/results/run-profiles-*.log

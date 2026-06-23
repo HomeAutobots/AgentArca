@@ -99,7 +99,7 @@ RUN apt-get update -qq && \
         iproute2 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /var/log/squid /var/spool/squid /etc/squid/conf.d /etc/squid/ssl \
+    && mkdir -p /var/log/squid /var/spool/squid /etc/squid/conf.d /etc/squid/local.d /etc/squid/ssl \
     && chown -R proxy:proxy /var/log/squid /var/spool/squid
 
 # Generate a self-signed certificate for Squid's ssl-bump port TLS context.
