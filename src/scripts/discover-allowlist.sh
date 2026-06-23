@@ -42,7 +42,12 @@ esac
 
 GATEWAY="${AGENT}-gateway"
 DEVC="${AGENT}-devcontainer"
-COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.discovery.yml --profile "$AGENT")
+# Native-Linux DNS overlay (docker-compose.linux.yml): layered automatically on Linux, inert on
+# macOS. Without it the discovery gateway never reaches healthy on Linux (embedded-resolver DNS).
+# Layered before the discovery overlay so squid-discovery.conf still wins the squid.conf mount.
+LINUX_OVERLAY=()
+if [ "$(uname -s)" = "Linux" ]; then LINUX_OVERLAY=(-f docker-compose.linux.yml); fi
+COMPOSE=(docker compose -f docker-compose.yml "${LINUX_OVERLAY[@]}" -f docker-compose.discovery.yml --profile "$AGENT")
 SNI_OUTPUT="/tmp/discovery-snis-${AGENT}.txt"
 
 echo "[discover] === Allowlist discovery for agent: ${AGENT} (splice-ALL observe mode) ==="

@@ -76,6 +76,26 @@ echo "[gateway/entrypoint] Fragment installed (mode 444, read-only)."
 # 127.0.0.11 on native Linux via docker-compose.linux.yml). squid.conf is baked into the
 # image, so rewrite the dns_nameservers line at startup to match the L3 firewall resolver.
 GATEWAY_DNS_RESOLVER="${GATEWAY_DNS_RESOLVER:-192.168.65.7}"
+# Validate before interpolating into sed (and before init-firewall consumes it): the
+# value must be a bare dotted-quad IPv4 address. Fail closed on anything else so a bad
+# value can't corrupt squid.conf or be passed downstream to the L3 firewall rules.
+# Reject any char outside [0-9.] first: bash ERE '$' matches before a trailing newline, so a
+# value like $'192.168.65.7\n' would otherwise slip past the dotted-quad regex below.
+if [[ "${GATEWAY_DNS_RESOLVER}" == *[!0-9.]* ]]; then
+  echo "[gateway/entrypoint] ERROR: GATEWAY_DNS_RESOLVER='${GATEWAY_DNS_RESOLVER}' contains characters other than digits and dots." >&2
+  exit 1
+fi
+if [[ ! "${GATEWAY_DNS_RESOLVER}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+  echo "[gateway/entrypoint] ERROR: GATEWAY_DNS_RESOLVER='${GATEWAY_DNS_RESOLVER}' is not a valid IPv4 address." >&2
+  exit 1
+fi
+IFS='.' read -r _o1 _o2 _o3 _o4 <<< "${GATEWAY_DNS_RESOLVER}"
+for _o in "$_o1" "$_o2" "$_o3" "$_o4"; do
+  if [ "$_o" -gt 255 ]; then
+    echo "[gateway/entrypoint] ERROR: GATEWAY_DNS_RESOLVER='${GATEWAY_DNS_RESOLVER}' has an octet out of range (>255)." >&2
+    exit 1
+  fi
+done
 if [ -w /etc/squid/squid.conf ]; then
   sed -i "s/^dns_nameservers .*/dns_nameservers ${GATEWAY_DNS_RESOLVER}/" /etc/squid/squid.conf
   echo "[gateway/entrypoint] Squid dns_nameservers set to ${GATEWAY_DNS_RESOLVER}."

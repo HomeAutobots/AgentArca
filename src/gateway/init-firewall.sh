@@ -81,6 +81,21 @@ iptables -A INPUT -p tcp --dport 8080 -s 192.168.0.0/16 -j ACCEPT
 # resolver 192.168.65.7). On native Linux set GATEWAY_DNS_RESOLVER=127.0.0.11 (the
 # embedded resolver, which works on native Linux); docker-compose.linux.yml does this.
 DNS_RESOLVER="${GATEWAY_DNS_RESOLVER:-192.168.65.7}"
+# Fail closed if the resolver is not a bare dotted-quad IPv4 address. The value is
+# interpolated directly into iptables rules below, so an invalid or hostile value must
+# abort firewall init rather than inject iptables arguments or program a broken rule.
+# Reject any char outside [0-9.] first: bash ERE '$' matches before a trailing newline, so a
+# value like $'192.168.65.7\n' would otherwise slip past the dotted-quad regex below.
+if [[ "${DNS_RESOLVER}" == *[!0-9.]* ]]; then
+  die "GATEWAY_DNS_RESOLVER='${DNS_RESOLVER}' contains characters other than digits and dots"
+fi
+if [[ ! "${DNS_RESOLVER}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+  die "GATEWAY_DNS_RESOLVER='${DNS_RESOLVER}' is not a valid IPv4 address (expected dotted-quad)"
+fi
+IFS='.' read -r _o1 _o2 _o3 _o4 <<< "${DNS_RESOLVER}"
+for _o in "$_o1" "$_o2" "$_o3" "$_o4"; do
+  [ "$_o" -le 255 ] || die "GATEWAY_DNS_RESOLVER='${DNS_RESOLVER}' has an octet out of range (>255)"
+done
 iptables -A OUTPUT -p udp --dport 53 -d "${DNS_RESOLVER}" -j ACCEPT
 iptables -A OUTPUT -p tcp --dport 53 -d "${DNS_RESOLVER}" -j ACCEPT
 
