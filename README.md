@@ -21,6 +21,8 @@ The design goal is blast-radius containment, not prevention. AgentArca assumes p
 | `claude` | Claude Code | `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` |
 | `codex` | OpenAI Codex CLI | `OPENAI_API_KEY` or `CODEX_API_KEY` |
 
+Codex also supports ChatGPT-subscription login (`codex login --device-auth`) instead of an API key; on that path no `.env` key is set and the token is minted into the container's token store.
+
 Exactly one profile runs at a time. Profile mutual exclusion is a design invariant: no shared credential, session, or config volume across profiles. This is what keeps inter-agent threats out of scope.
 
 ## How it works
@@ -89,6 +91,8 @@ bash tests/containment/rt25-run-profiles.sh   # per-profile containment
 
 Containment tests frame everything as "assume injection succeeds; prove the boundary holds." The boundary suites contain 100% of exfil/escape attempts across all three profiles.
 
+Continuous integration runs static security and quality scans on every pull request (shellcheck, hadolint, Compose validation, gitleaks secret scan, Trivy, and the MCP supply-chain gates). The heavier Docker acceptance and containment suites above run on a nightly schedule.
+
 ## What this is and is not safe for
 
 Honesty over false security. AgentArca reduces blast radius. It does not make a prompt-injected agent safe, and it does not solve prompt injection (which is unsolved).
@@ -112,7 +116,11 @@ Honesty over false security. AgentArca reduces blast radius. It does not make a 
 
 ## Status
 
-The Claude profile is live-verified end to end (auth, inference, and an empirically locked `api.anthropic.com`-only allowlist). The Codex profile is boundary-proven but not yet live-verified, and its allowlist still ships as a seed list pending an authenticated discovery run. The Copilot profile is the original reference build.
+- **Claude Code** is live-verified end to end (auth, inference, and an empirically locked `api.anthropic.com`-only allowlist).
+- **Codex** is live-verified end to end on the ChatGPT-subscription path (auth via `codex login --device-auth`, inference, and an empirically locked allowlist). On that path inference routes through `chatgpt.com`, so the lock is `{chatgpt.com, auth.openai.com, api.openai.com}`; the narrow `api.openai.com`-only lock applies to the API-key path.
+- **Copilot** is the original reference build: boundary-proven, with live VS Code runtime verification tracked as a documented obligation.
+
+The egress boundary, isolation tier, and config immutability are proven for all three profiles by the credential-independent suites (108 containment attacks across the three profiles, 0 breaches).
 
 ## License
 
