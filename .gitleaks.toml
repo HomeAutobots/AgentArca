@@ -18,4 +18,9 @@ regexes = [
   # rsyslog TLS auth-mode directive (e.g. StreamDriverAuthMode="x509/name"),
   # a config keyword, not an API key.
   '''StreamDriverAuthMode''',
+  # AC-27-P1-17 test canary: a designed decoy constant used to verify that the
+  # admin secret sanitization code strips the value from audit records before
+  # they are written. This is not a real secret; it is the target of the test.
+  # File: tests/admin/test_allowlist_api.py, class TestSecretSanitization.
+  '''SECRET_CANARY\s*=\s*"TEST-SECRET-CANARY-12345"''',
 ]
