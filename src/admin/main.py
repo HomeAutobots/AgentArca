@@ -42,6 +42,8 @@ from src.admin.config import Settings, load_settings
 from src.admin.middleware.csrf import CSRFMiddleware
 from src.admin.middleware.host_validation import HostValidationMiddleware
 from src.admin.routes.health import router as health_router
+from src.admin.routes.allowlist import router as allowlist_router
+from src.admin.routes.logs import router as logs_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -233,7 +235,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(HostValidationMiddleware, port=settings.port)
 
     # Step 7: Include routers.
+    # Phase 0 router.
     app.include_router(health_router)
+    # Phase 1 routers (mounted behind the same middleware chain; no middleware changes).
+    app.include_router(allowlist_router)
+    app.include_router(logs_router)
 
     # Serve the static frontend. Mounted AFTER routers so /api/* takes priority.
     static_dir = Path(__file__).parent / "static"
