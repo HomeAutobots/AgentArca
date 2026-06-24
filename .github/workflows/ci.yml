@@ -122,3 +122,15 @@ jobs:
             echo "==== composability gate: $p ===="
             MCP_JSON_PATH="$p" bash ci/mcp-composability-gate.sh
           done
+
+  admin-tests:
+    name: admin-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # build-admin.sh creates a venv, installs the hash-pinned admin deps
+      # (--require-hashes), and runs the 5 build-gate assertions including
+      # `pytest -m "not integration"` (the functional + red-team admin suites).
+      # No Docker required; the 3 integration ACs are gated out and run in nightly.
+      - name: Admin control plane build gate (Docker-free unit + adversarial tests)
+        run: bash src/scripts/build-admin.sh
