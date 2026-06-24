@@ -63,25 +63,28 @@ class AddEntryRequest(BaseModel):
 # Secret sanitization (AC-27-P1-17, SPEC-27-P1 section 6.3)
 # ---------------------------------------------------------------------------
 
-def _sanitize_detail(detail: str, secret: str) -> str:
+def _sanitize_detail(value, secret: str):
     """
-    Ensure the admin secret string does not appear in a detail field before it
-    is written to the audit log.
+    Ensure the admin secret string does not appear in ANY audit field (target,
+    before, after, detail) or in a reflected response body before it is emitted.
 
-    If the secret is found in detail, replaces detail with a safe substitute and
-    logs the sanitization event to stderr. This is an absolute prohibition: a
-    detail field that contains the secret MUST NOT reach the audit log.
+    Generalized from detail-only to any field: a non-string value (e.g. None) is
+    returned unchanged; a string containing the secret is replaced with a safe
+    substitute and the event logged to stderr. This is an absolute prohibition
+    (AC-27-P1-17): no audit field or response body may contain the secret. The
+    red-team found target/before/after were written raw while only detail was
+    scrubbed; this closes that bypass at the single audit-write chokepoint.
     """
-    if not secret:
-        return detail
-    if secret in detail:
+    if not secret or not isinstance(value, str):
+        return value
+    if secret in value:
         print(
-            "[AUDIT-SANITIZE] Prevented admin secret from entering audit record detail. "
-            "Substituting safe string.",
+            "[AUDIT-SANITIZE] Prevented admin secret from entering an audit field "
+            "or response body. Substituting safe string.",
             file=sys.stderr,
         )
-        return "[sanitized: detail contained sensitive data]"
-    return detail
+        return "[sanitized: contained sensitive data]"
+    return value
 
 
 def _write_audit(
@@ -104,6 +107,12 @@ def _write_audit(
         return
 
     secret = getattr(request.app.state, "secret", "") or ""
+    # Sanitize EVERY field against the secret, not just detail (red-team Phase 1 Finding 1):
+    # target/before/after were previously written raw, so a secret submitted as a host
+    # persisted into the durable audit log via the reject path. This is the single chokepoint.
+    safe_target = _sanitize_detail(target, secret)
+    safe_before = _sanitize_detail(before, secret)
+    safe_after = _sanitize_detail(after, secret)
     safe_detail = _sanitize_detail(detail, secret)
 
     try:
@@ -112,9 +121,9 @@ def _write_audit(
             session_id=session_id,
             domain="allowlist",
             action=action,
-            target=target or "",
-            before=before,
-            after=after,
+            target=safe_target or "",
+            before=safe_before,
+            after=safe_after,
             outcome=outcome,
             detail=safe_detail,
         )
@@ -203,7 +212,12 @@ async def add_entry(
         )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid host: {host!r}. Must be a valid SNI FQDN (letters, digits, dots, hyphens only).",
+            # Sanitize the reflected host (red-team Phase 1 Finding 2): a secret submitted as
+            # a host must not be echoed back in the response body (AC-27-P1-17).
+            detail=_sanitize_detail(
+                f"Invalid host: {host!r}. Must be a valid SNI FQDN (letters, digits, dots, hyphens only).",
+                getattr(request.app.state, "secret", "") or "",
+            ),
         )
 
     # Step 2: Call the shell primitive.
@@ -346,7 +360,11 @@ async def remove_entry(
         )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid host: {decoded_host!r}.",
+            # Sanitize the reflected host (red-team Phase 1 Finding 2).
+            detail=_sanitize_detail(
+                f"Invalid host: {decoded_host!r}.",
+                getattr(request.app.state, "secret", "") or "",
+            ),
         )
 
     try:
