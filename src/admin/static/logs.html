@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AgentArca - Logs</title>
+  <style>
+    body { font-family: monospace; margin: 2em; background: #1a1a1a; color: #e0e0e0; }
+    h1 { color: #7ec8e3; }
+    a { color: #7ec8e3; }
+    nav { margin-bottom: 1.5em; }
+    nav a { margin-right: 1em; }
+    .tabs { display: flex; gap: 0; margin-bottom: 0; border-bottom: 1px solid #333; }
+    .tab-btn { padding: 0.4em 1.2em; background: #242424; color: #aaa; border: 1px solid #333;
+      border-bottom: none; cursor: pointer; font-family: monospace; }
+    .tab-btn.active { background: #1a1a1a; color: #e0e0e0; border-bottom: 1px solid #1a1a1a; margin-bottom: -1px; }
+    .tab-panel { display: none; padding: 1em; background: #1a1a1a; border: 1px solid #333; border-top: none; }
+    .tab-panel.active { display: block; }
+    .section { margin: 1em 0; }
+    button { padding: 0.3em 1em; background: #2a5f2a; color: #e0e0e0; border: 1px solid #4a9a4a;
+      cursor: pointer; font-family: monospace; }
+    .msg { margin: 0.5em 0; padding: 0.5em; font-size: 0.9em; }
+    .msg.ok { background: #1a3a1a; border-left: 3px solid #4a9a4a; }
+    .msg.err { background: #3a1a1a; border-left: 3px solid #9a4a4a; }
+    .msg.warn { background: #3a3a1a; border-left: 3px solid #9a9a4a; }
+    .notice { padding: 0.5em 0.8em; background: #2a2a1a; border-left: 3px solid #9a9a4a;
+      font-size: 0.85em; color: #c0c080; margin: 0.5em 0; }
+    table { border-collapse: collapse; width: 100%; font-size: 0.85em; margin-top: 0.5em; }
+    th, td { text-align: left; padding: 0.3em 0.5em; border-bottom: 1px solid #2a2a2a; vertical-align: top; }
+    th { color: #888; position: sticky; top: 0; background: #1a1a1a; }
+    .log-container { max-height: 40em; overflow-y: auto; }
+    .pagination { margin-top: 0.5em; font-size: 0.85em; color: #888; }
+    .pagination button { font-size: 0.85em; padding: 0.2em 0.6em; margin: 0 0.2em; }
+    code { font-family: monospace; font-size: 0.9em; }
+    .status-ok { color: #4a9a4a; }
+    .status-warn { color: #d4801a; }
+    .status-err { color: #9a4a4a; }
+    .svc-healthy { color: #4a9a4a; }
+    .svc-unhealthy { color: #9a4a4a; }
+    .svc-running { color: #7ec8e3; }
+  </style>
+</head>
+<body>
+  <h1>AgentArca - Logs</h1>
+  <nav>
+    <a href="/allowlist.html">Allowlist</a>
+    <a href="/logs.html">Logs</a>
+  </nav>
+
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="audit">Audit Log</button>
+    <button class="tab-btn" data-tab="egress">Egress Log</button>
+    <button class="tab-btn" data-tab="health">Health</button>
+  </div>
+
+  <!-- Audit tab -->
+  <div id="tab-audit" class="tab-panel active">
+    <div class="section">
+      <button id="audit-refresh">Refresh</button>
+      <span id="audit-total" style="font-size:0.85em;color:#888;margin-left:1em;"></span>
+    </div>
+    <div id="audit-msg"></div>
+    <div class="log-container">
+      <table>
+        <thead>
+          <tr>
+            <th>Timestamp</th>
+            <th>Session</th>
+            <th>Action</th>
+            <th>Target</th>
+            <th>Outcome</th>
+            <th>Detail</th>
+          </tr>
+        </thead>
+        <tbody id="audit-body"></tbody>
+      </table>
+    </div>
+    <div class="pagination" id="audit-pagination"></div>
+  </div>
+
+  <!-- Egress tab -->
+  <div id="tab-egress" class="tab-panel">
+    <div class="notice">
+      Best-effort: requires a running gateway. If the egress log is empty or incomplete,
+      item-13 log forwarding may not be active yet (MVP disclosure, SPEC-27-P1 section 5.6).
+    </div>
+    <div class="section">
+      <button id="egress-refresh">Refresh</button>
+      <span id="egress-status" style="font-size:0.85em;color:#888;margin-left:1em;"></span>
+    </div>
+    <div id="egress-msg"></div>
+    <div class="log-container">
+      <table>
+        <thead>
+          <tr>
+            <th>Timestamp</th>
+            <th>Client</th>
+            <th>Result</th>
+            <th>Method</th>
+            <th>URL / SNI</th>
+            <th>Bytes</th>
+          </tr>
+        </thead>
+        <tbody id="egress-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Health tab -->
+  <div id="tab-health" class="tab-panel">
+    <div class="section">
+      <button id="health-refresh">Refresh</button>
+      <span id="health-profile" style="font-size:0.85em;color:#888;margin-left:1em;"></span>
+    </div>
+    <div id="health-msg"></div>
+    <table>
+      <thead>
+        <tr><th>Service</th><th>Status</th><th>Health</th><th>Ports</th></tr>
+      </thead>
+      <tbody id="health-body"></tbody>
+    </table>
+  </div>
+
+  <script src="/logs.js"></script>
+</body>
+</html>

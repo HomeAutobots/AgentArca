@@ -224,5 +224,50 @@ cd "${REPO_ROOT}"
 
 pass "Assertion 5: all non-integration tests passed."
 
+# ---------------------------------------------------------------------------
+# Phase 1 assertions (SPEC-27-P1 section 11)
+# ---------------------------------------------------------------------------
+
+# Assertion 6: No mutating method on any /api/v1/logs/* route.
+info "Assertion 6 (Phase 1): route enumeration - no write methods on log paths..."
+"${PYTHON}" -c "
+import sys
+sys.path.insert(0, '${REPO_ROOT}')
+from tests.admin.test_logs_api import test_no_write_on_logs_routes
+test_no_write_on_logs_routes()
+print('Assertion 6 passed: no mutating methods on log routes.')
+"
+pass "Assertion 6: no mutating methods on log routes."
+
+# Assertion 7: No direct overrides.conf write in allowlist.py.
+# The Python wrapper must NEVER reference overrides.conf directly (write path).
+info "Assertion 7 (Phase 1): checking allowlist.py for direct overrides.conf references..."
+ALLOWLIST_PY="${REPO_ROOT}/src/admin/primitives/allowlist.py"
+BAD_OVERRIDES=$(
+    grep -n 'overrides.conf' "${ALLOWLIST_PY}" \
+    | grep -v '#' \
+    || true
+)
+if [[ -n "${BAD_OVERRIDES}" ]]; then
+    fail "Assertion 7 FAILED: allowlist.py contains direct references to overrides.conf outside comments. Wrap-don't-reimplement boundary violated:\n${BAD_OVERRIDES}"
+fi
+pass "Assertion 7: allowlist.py does not reference overrides.conf directly (outside comments)."
+
+# Assertion 8: No direct squid/SIGHUP call in allowlist.py.
+# The Python wrapper must NEVER call squid, kill -HUP, or SIGHUP itself.
+info "Assertion 8 (Phase 1): checking allowlist.py for direct squid/SIGHUP calls..."
+BAD_SQUID=$(
+    grep -n 'squid\|kill.*HUP\|SIGHUP' "${ALLOWLIST_PY}" \
+    | grep -v '#' \
+    || true
+)
+if [[ -n "${BAD_SQUID}" ]]; then
+    fail "Assertion 8 FAILED: allowlist.py contains direct squid/SIGHUP references outside comments. Wrap-don't-reimplement boundary violated:\n${BAD_SQUID}"
+fi
+pass "Assertion 8: allowlist.py does not call squid, SIGHUP, or kill -HUP directly."
+
+# Assertion 9: Phase 1 unit tests pass (already covered by Assertion 5, but named explicitly).
+pass "Assertion 9: Phase 1 unit tests passed (covered by Assertion 5 above)."
+
 echo ""
-echo -e "${GREEN}All build gate assertions passed.${NC}"
+echo -e "${GREEN}All build gate assertions passed (Phase 0 + Phase 1).${NC}"

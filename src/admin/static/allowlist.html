@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AgentArca - Egress Allowlist</title>
+  <style>
+    body { font-family: monospace; margin: 2em; background: #1a1a1a; color: #e0e0e0; }
+    h1 { color: #7ec8e3; }
+    a { color: #7ec8e3; }
+    .section { margin: 1.5em 0; padding: 1em; background: #242424; border: 1px solid #333; }
+    .section h2 { margin-top: 0; color: #a0c8a0; font-size: 1em; }
+    label { display: block; margin-bottom: 0.3em; color: #aaa; font-size: 0.9em; }
+    input[type=text] { width: 40em; padding: 0.4em; background: #333; color: #e0e0e0; border: 1px solid #555; font-family: monospace; }
+    button { padding: 0.4em 1.2em; background: #2a5f2a; color: #e0e0e0; border: 1px solid #4a9a4a; cursor: pointer; font-family: monospace; }
+    button.danger { background: #5f2a2a; border-color: #9a4a4a; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .msg { margin: 0.5em 0; padding: 0.5em; font-size: 0.9em; }
+    .msg.ok { background: #1a3a1a; border-left: 3px solid #4a9a4a; }
+    .msg.err { background: #3a1a1a; border-left: 3px solid #9a4a4a; }
+    .msg.warn { background: #3a3a1a; border-left: 3px solid #9a9a4a; }
+    .risk-notice { margin: 0.5em 0; padding: 0.5em 0.8em; background: #3a2a1a; border-left: 3px solid #d4801a; font-size: 0.85em; color: #d4c090; }
+    table { border-collapse: collapse; width: 100%; margin-top: 0.5em; font-size: 0.9em; }
+    th, td { text-align: left; padding: 0.3em 0.6em; border-bottom: 1px solid #333; }
+    th { color: #aaa; }
+    .badge-base { color: #7ec8e3; }
+    .badge-overlay { color: #a0c8a0; }
+    .badge-locked { color: #888; font-size: 0.8em; }
+    #modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0,0,0,0.7); z-index: 100; align-items: center; justify-content: center; }
+    #modal-overlay.visible { display: flex; }
+    #modal-box { background: #242424; border: 1px solid #555; padding: 1.5em; max-width: 40em; width: 90%; }
+    #modal-box h3 { margin-top: 0; color: #d4801a; }
+    #modal-box .risk-notice { margin-bottom: 1em; }
+    #modal-actions { margin-top: 1em; }
+    #modal-actions button { margin-right: 0.5em; }
+    nav { margin-bottom: 1.5em; }
+    nav a { margin-right: 1em; }
+  </style>
+</head>
+<body>
+  <h1>AgentArca - Egress Allowlist</h1>
+  <nav>
+    <a href="/allowlist.html">Allowlist</a>
+    <a href="/logs.html">Logs</a>
+  </nav>
+
+  <div id="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div id="modal-box">
+      <h3 id="modal-title">Confirm: Add Host to Egress Allowlist</h3>
+      <p>You are about to add <strong id="modal-host"></strong> to the egress allowlist.</p>
+      <div class="risk-notice">
+        R-b: Each host added widens the egress exfil surface. Add the narrowest host that works.
+        This action will be recorded in the audit log.
+      </div>
+      <div id="modal-actions">
+        <button id="modal-confirm">Confirm Add</button>
+        <button id="modal-cancel" class="danger">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Add Host</h2>
+    <label for="new-host">SNI hostname (e.g. api.example.com or .internal.example.com):</label>
+    <input type="text" id="new-host" placeholder="api.example.com" autocomplete="off" spellcheck="false">
+    <button id="add-btn" style="margin-left:0.5em">Add</button>
+    <div id="add-msg"></div>
+  </div>
+
+  <div class="section">
+    <h2>Current Allowlist</h2>
+    <div id="gateway-status" style="font-size:0.85em; color:#888; margin-bottom:0.5em;"></div>
+    <button id="refresh-btn">Refresh</button>
+    <div id="list-msg"></div>
+    <table id="allowlist-table">
+      <thead><tr><th>Host</th><th>Source</th><th>Locked</th><th>Action</th></tr></thead>
+      <tbody id="allowlist-body"></tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>Reload Gateway</h2>
+    <p style="font-size:0.85em; color:#888; margin:0 0 0.5em 0;">
+      Re-apply the overlay file without adding or removing entries.
+      The gateway runs squid -k parse before applying.
+    </p>
+    <button id="reload-btn">Reload Gateway</button>
+    <div id="reload-msg"></div>
+  </div>
+
+  <script src="/allowlist.js"></script>
+</body>
+</html>
