@@ -4,6 +4,8 @@
 **/*.pem
 **/node_modules/
 **/__pycache__/
+.venv-admin/
+**/*.egg-info/
 
 # editor vault + OS cruft
 .obsidian/
