@@ -269,5 +269,62 @@ pass "Assertion 8: allowlist.py does not call squid, SIGHUP, or kill -HUP direct
 # Assertion 9: Phase 1 unit tests pass (already covered by Assertion 5, but named explicitly).
 pass "Assertion 9: Phase 1 unit tests passed (covered by Assertion 5 above)."
 
+# ---------------------------------------------------------------------------
+# Phase 2 assertions (SPEC-27-P2 section 18)
+# ---------------------------------------------------------------------------
+
+LIFECYCLE_PY="${REPO_ROOT}/src/admin/primitives/lifecycle.py"
+
+# Assertion 10: ALLOWED_PROFILES is exactly {copilot, claude, codex}.
+# Fails if the set has been modified (added or removed profile).
+info "Assertion 10 (Phase 2): ALLOWED_PROFILES exact set check..."
+"${PYTHON}" -c "
+import sys
+sys.path.insert(0, '${REPO_ROOT}')
+from src.admin.primitives.lifecycle import ALLOWED_PROFILES
+expected = frozenset({'copilot', 'claude', 'codex'})
+assert ALLOWED_PROFILES == expected, (
+    f'ALLOWED_PROFILES mismatch: got {ALLOWED_PROFILES!r}, expected {expected!r}. '
+    'Adding or removing a profile requires a deliberate code change AND threat-model update.'
+)
+# Also check the set does not contain MORE than 3 elements (prevents silent expansion).
+assert len(ALLOWED_PROFILES) == 3, (
+    f'ALLOWED_PROFILES has {len(ALLOWED_PROFILES)} elements; expected exactly 3.'
+)
+print('ALLOWED_PROFILES:', ALLOWED_PROFILES)
+"
+pass "Assertion 10: ALLOWED_PROFILES is exactly {copilot, claude, codex} (3 elements)."
+
+# Assertion 11: No `docker exec` call in lifecycle.py (outside comments).
+info "Assertion 11 (Phase 2): checking lifecycle.py for docker exec calls..."
+BAD_DOCKER_EXEC=$(
+    grep -n 'docker exec' "${LIFECYCLE_PY}" \
+    | grep -v '#' \
+    || true
+)
+if [[ -n "${BAD_DOCKER_EXEC}" ]]; then
+    fail "Assertion 11 FAILED: lifecycle.py contains direct 'docker exec' calls outside comments. This violates the wrap-don't-reimplement boundary:\n${BAD_DOCKER_EXEC}"
+fi
+pass "Assertion 11: lifecycle.py does not call 'docker exec' directly (outside comments)."
+
+# Assertion 12: No `shell=True` in lifecycle.py (outside comments).
+info "Assertion 12 (Phase 2): checking lifecycle.py for shell=True..."
+BAD_SHELL_TRUE=$(
+    grep -n 'shell=True' "${LIFECYCLE_PY}" \
+    | grep -v '#' \
+    || true
+)
+if [[ -n "${BAD_SHELL_TRUE}" ]]; then
+    fail "Assertion 12 FAILED: lifecycle.py contains shell=True outside comments. All subprocess calls must use shell=False (the default):\n${BAD_SHELL_TRUE}"
+fi
+pass "Assertion 12: lifecycle.py does not use shell=True (outside comments)."
+
+# Assertion 13: Phase 2 unit tests pass.
+# This runs all non-integration tests (Phase 0 + Phase 1 + Phase 2), asserting no regressions.
+info "Assertion 13 (Phase 2): running pytest tests/admin/ -m 'not integration' -q..."
+cd "${REPO_ROOT}"
+"${PYTEST}" tests/admin/ -m "not integration" -q --tb=short
+pass "Assertion 13: all non-integration tests passed (Phase 0 + Phase 1 + Phase 2)."
+
 echo ""
-echo -e "${GREEN}All build gate assertions passed (Phase 0 + Phase 1).${NC}"
+echo -e "${GREEN}All build gate assertions passed (Phase 0 + Phase 1 + Phase 2).${NC}"

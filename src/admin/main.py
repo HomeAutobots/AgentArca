@@ -44,6 +44,7 @@ from src.admin.middleware.host_validation import HostValidationMiddleware
 from src.admin.routes.health import router as health_router
 from src.admin.routes.allowlist import router as allowlist_router
 from src.admin.routes.logs import router as logs_router
+from src.admin.routes.lifecycle import router as lifecycle_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -179,6 +180,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     repo_root = Path(__file__).resolve().parent.parent.parent  # AgentArca/
     assert_audit_path_not_in_volume(settings.audit_log_path, repo_root)
 
+    # Step 5b: Ensure the lifecycle lock file exists on the host filesystem (Phase 2).
+    # Import here to avoid circular imports at module level during Phase 0/1-only startup.
+    from src.admin.primitives.lifecycle import ensure_lifecycle_lock_file  # noqa: PLC0415
+    ensure_lifecycle_lock_file()
+
     # Log startup info at factory time (AC-27-P0-08: startup log contains bind address).
     # Never log secret or session_key.
     logger.info(
@@ -240,6 +246,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Phase 1 routers (mounted behind the same middleware chain; no middleware changes).
     app.include_router(allowlist_router)
     app.include_router(logs_router)
+    # Phase 2 router (mounted behind the same middleware chain; no middleware changes).
+    app.include_router(lifecycle_router)
 
     # Serve the static frontend. Mounted AFTER routers so /api/* takes priority.
     static_dir = Path(__file__).parent / "static"
