@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AgentArca Admin</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      max-width: 480px;
+      margin: 80px auto;
+      padding: 0 1rem;
+      background: #f5f5f5;
+    }
+    h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
+    p.subtitle { color: #666; font-size: 0.85rem; margin-top: 0; }
+    form { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 1.5rem; }
+    label { display: block; margin-bottom: 0.5rem; font-size: 0.9rem; font-weight: 500; }
+    input[type="password"] {
+      width: 100%; box-sizing: border-box; padding: 0.5rem 0.75rem;
+      font-size: 1rem; border: 1px solid #ccc; border-radius: 4px; margin-bottom: 1rem;
+    }
+    button {
+      width: 100%; padding: 0.6rem; font-size: 1rem;
+      background: #2563eb; color: #fff; border: none; border-radius: 4px; cursor: pointer;
+    }
+    button:hover { background: #1d4ed8; }
+    #status { margin-top: 0.75rem; font-size: 0.85rem; color: #dc2626; }
+    #status.ok { color: #16a34a; }
+    nav { display: none; margin-top: 1.5rem; }
+    nav a {
+      display: inline-block; margin-right: 1rem; color: #2563eb;
+      text-decoration: none; font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+  <h1>AgentArca Admin</h1>
+  <p class="subtitle">Host-local operator console. Loopback access only.</p>
+
+  <form id="login-form">
+    <label for="secret">Shared secret</label>
+    <input type="password" id="secret" name="secret" autocomplete="current-password"
+           placeholder="Enter admin secret" required />
+    <button type="submit">Sign in</button>
+    <div id="status" aria-live="polite"></div>
+  </form>
+
+  <nav id="nav">
+    <a href="/api/v1/health">Health</a>
+  </nav>
+
+  <script src="/app.js"></script>
+</body>
+</html>
