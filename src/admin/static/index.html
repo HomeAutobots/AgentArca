@@ -28,10 +28,14 @@
     #status { margin-top: 0.75rem; font-size: 0.85rem; color: #dc2626; }
     #status.ok { color: #16a34a; }
     nav { display: none; margin-top: 1.5rem; }
+    nav h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: #888; margin: 0 0 0.5rem; }
     nav a {
-      display: inline-block; margin-right: 1rem; color: #2563eb;
-      text-decoration: none; font-size: 0.9rem;
+      display: block; padding: 0.7rem 0.9rem; margin-bottom: 0.5rem;
+      background: #fff; border: 1px solid #ddd; border-radius: 6px;
+      color: #2563eb; text-decoration: none; font-size: 0.95rem; font-weight: 500;
     }
+    nav a:hover { border-color: #2563eb; background: #f0f6ff; }
+    nav a small { display: block; color: #888; font-weight: 400; font-size: 0.78rem; margin-top: 0.15rem; }
   </style>
 </head>
 <body>
@@ -47,7 +51,12 @@
   </form>
 
   <nav id="nav">
-    <a href="/api/v1/health">Health</a>
+    <h2>Control domains</h2>
+    <a href="/allowlist.html">Egress allowlist<small>View and add/remove allowed SNI hosts for the active profile</small></a>
+    <a href="/logs.html">Logs &amp; activity<small>Audit log, gateway egress log, container/gateway health</small></a>
+    <a href="/profiles.html">Profiles<small>Bring a profile up/down/switch (one at a time)</small></a>
+    <a href="/credentials.html">Credentials<small>Set or clear the per-profile .env tokens (write-only, masked)</small></a>
+    <a href="/isolation.html">Isolation<small>Read-only view of the sandbox isolation posture</small></a>
   </nav>
 
   <script src="/app.js"></script>
