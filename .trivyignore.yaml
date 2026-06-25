@@ -20,8 +20,14 @@ secrets:
   # ghp_-shaped dummy submitted as a credential to verify it is never echoed
   # in responses, audit logs, or log streams (containment regression guard).
   # Not a real GitHub PAT; intentionally ghp_-shaped to exercise the detector.
+  # .gitleaks.toml: the allowlist regexes in this scanner config file contain
+  # the same ghp_-shaped canary pattern verbatim (so the regex can match it in
+  # the test files). The pattern in .gitleaks.toml is a regex fragment used to
+  # SUPPRESS a false positive; it is not a credential. Trivy scanning its own
+  # config file is a false positive by definition.
   - id: github-pat
     paths:
       - "tests/admin/test_credentials_primitive.py"
       - "tests/admin/test_credentials_api.py"
       - "tests/admin/test_redteam_phase3.py"
+      - ".gitleaks.toml"
