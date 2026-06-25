@@ -128,6 +128,14 @@ Honesty over false security. AgentArca reduces blast radius. It does not make a 
 - **Malicious code committed now, run elsewhere later.** The container cannot stop the agent from writing harmful code that executes outside it.
 - **Weaker interior gate under Codex.** Codex's pre-tool hook schema is under-documented, so its interior gate is best-effort; the L3 firewall remains the boundary.
 
+## Admin console
+
+The admin console is a host-local FastAPI application that manages the sandbox from outside it. It binds to `127.0.0.1:8770` only and is not reachable from any container. Use it to manage the egress allowlist, view logs, start and stop profiles, and set agent credentials.
+
+The agent cannot reach the console. That is a design invariant, not a config option.
+
+For setup, security model, full endpoint reference, and the residual risks that come with operating a privileged management surface, see [`src/admin/README.md`](src/admin/README.md).
+
 ## Status
 
 - **Claude Code** is live-verified end to end (auth, inference, and an empirically locked `api.anthropic.com`-only allowlist).
