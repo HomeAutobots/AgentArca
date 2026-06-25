@@ -9,3 +9,14 @@ misconfigurations:
       (ADR-002). The dev containers, which run untrusted agent code, are non-root
       and cap-dropped. Root here is confined to the firewall sidecar, not the
       agent workload.
+
+secrets:
+  # Phase 3 credentials test suite: ghp_-prefixed string literals used as input
+  # tokens to compute_fingerprint() unit tests (AC-27-P3-03/04). These verify
+  # HMAC-SHA256 determinism, salt non-reversibility, and non-cleartext output.
+  # Not real GitHub PATs; the values have no privileges and are never committed
+  # to any environment. Test files are the correct place to store test inputs.
+  - id: github-pat
+    paths:
+      - "tests/admin/test_credentials_primitive.py"
+      - "tests/admin/test_credentials_api.py"
