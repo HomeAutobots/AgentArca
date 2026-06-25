@@ -20,11 +20,3 @@ secrets:
     paths:
       - "tests/admin/test_credentials_primitive.py"
       - "tests/admin/test_credentials_api.py"
-      # The .gitleaks.toml allowlist contains regex literals that embed the
-      # canary token shapes they are matching against, so Trivy flags the config
-      # file itself. The file contains no real credentials: every ghp_-shaped
-      # string is inside a TOML regex pattern string that is an allowlist entry
-      # justifying a known test canary. Allowlisting the config file here is the
-      # correct approach; the alternative (escaping the token shape so it no
-      # longer matches) would break the gitleaks allowlist it is meant to provide.
-      - ".gitleaks.toml"
