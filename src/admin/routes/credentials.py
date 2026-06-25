@@ -262,6 +262,29 @@ async def put_credential(
             },
         )
 
+    # .env-injection guard (defense-in-depth; primitive also rejects). A newline/CR in the
+    # value would forge a second logical .env key; a NUL can confuse downstream parsers.
+    # Reject before any file I/O so an out-of-allowlist key can never be written.
+    if any(ch in value for ch in ("\n", "\r", "\x00")):
+        _write_audit(
+            request, session_id,
+            action="credential_set",
+            target=key,
+            before=None,
+            after=None,
+            outcome="rejected-by-validation",
+            detail="value contains a forbidden control character",
+        )
+        value = ""  # clear immediately
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "ok": False,
+                "error": "invalid_value",
+                "detail": "value contains a forbidden control character (newline/CR/NUL)",
+            },
+        )
+
     salt = getattr(request.app.state, "fingerprint_salt", None)
     if salt is None:
         value = ""  # clear before error return

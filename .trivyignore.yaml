@@ -16,7 +16,12 @@ secrets:
   # HMAC-SHA256 determinism, salt non-reversibility, and non-cleartext output.
   # Not real GitHub PATs; the values have no privileges and are never committed
   # to any environment. Test files are the correct place to store test inputs.
+  # Phase 3 red-team suite (test_redteam_phase3.py): CANARY_TOKEN is a
+  # ghp_-shaped dummy submitted as a credential to verify it is never echoed
+  # in responses, audit logs, or log streams (containment regression guard).
+  # Not a real GitHub PAT; intentionally ghp_-shaped to exercise the detector.
   - id: github-pat
     paths:
       - "tests/admin/test_credentials_primitive.py"
       - "tests/admin/test_credentials_api.py"
+      - "tests/admin/test_redteam_phase3.py"

@@ -55,4 +55,15 @@ regexes = [
   '''compute_fingerprint\("ghp_DIFFERENT1234567890abcdef123456"''',
   '''real_token\s*=\s*"ghp_"\s*\+\s*"A"\s*\*\s*36''',
   '''different_token\s*=\s*"ghp_"\s*\+\s*"B"\s*\*\s*36''',
+  # Phase 3 red-team exfil canary: CANARY_TOKEN is a ghp_-shaped dummy value submitted
+  # as a credential to PUT /api/v1/credentials/{key} to verify the server NEVER echoes
+  # it in a response, audit log, or log stream (the containment assertion). Not a real
+  # GitHub PAT; the ghp_ prefix is intentional to exercise the token-shape detector.
+  # File: tests/admin/test_redteam_phase3.py, CANARY_TOKEN / CANARY_SUBSTRINGS.
+  '''CANARY_TOKEN\s*=\s*"ghp_RedTeamCanary3PhaseExfilCANARY0123456789abcd"''',
+  # Phase 3 red-team fixture secret: a hardcoded dummy value used only in the
+  # Docker-free test harness (TestClient against a temp secret file); written to a
+  # temp file, never to the real .env or any real credential store. Not a real secret.
+  # File: tests/admin/test_redteam_phase3.py, TEST_SECRET.
+  '''TEST_SECRET\s*=\s*"test-secret-value-RED-TEAM-P3-0xDEADBEEF"''',
 ]
