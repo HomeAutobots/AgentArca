@@ -55,4 +55,11 @@ regexes = [
   '''compute_fingerprint\("ghp_DIFFERENT1234567890abcdef123456"''',
   '''real_token\s*=\s*"ghp_"\s*\+\s*"A"\s*\*\s*36''',
   '''different_token\s*=\s*"ghp_"\s*\+\s*"B"\s*\*\s*36''',
+  # Phase 3 red-team canary: a deliberately fake GitHub PAT submitted as a
+  # credential value to PUT /api/v1/credentials/{key} to prove the value never
+  # surfaces in any HTTP response, audit log entry, or log stream. The ghp_
+  # prefix is intentional so the detector is exercised. Not a real credential.
+  # File: tests/admin/test_redteam_phase3.py, CANARY_TOKEN.
+  # Commit: 36a2a473 (branch: test/admin-phase3-redteam).
+  '''CANARY_TOKEN\s*=\s*"ghp_RedTeamCanary3PhaseExfilCANARY0123456789abcd"''',
 ]
