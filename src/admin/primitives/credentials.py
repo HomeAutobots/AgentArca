@@ -252,6 +252,22 @@ def set_credential(
             detail=f"value too long ({encoded_len} bytes; max {_MAX_VALUE_LEN})",
         )
 
+    # .env-injection guard (red-team P3, family 2): the .env file is line-oriented, so a
+    # value containing a newline/carriage-return would forge a SECOND logical KEY=VALUE line
+    # (e.g. value "x\nEVIL_KEY=y" -> an out-of-allowlist EVIL_KEY that Compose would load).
+    # A NUL byte can also truncate/confuse downstream parsers. Reject these control characters
+    # BEFORE any file I/O. No real credential token contains them; rejecting (not escaping)
+    # keeps the .env writer trivially correct and the one-logical-key invariant structural.
+    if any(ch in value for ch in ("\n", "\r", "\x00")):
+        value = ""  # clear before error return
+        return CredentialResult(
+            ok=False,
+            key=key,
+            outcome="rejected-by-validation",
+            fingerprint=None,
+            detail="value contains a forbidden control character (newline/CR/NUL)",
+        )
+
     # Compute fingerprint BEFORE we touch the file (so it's done even if write fails).
     fingerprint = compute_fingerprint(value, salt)
 
