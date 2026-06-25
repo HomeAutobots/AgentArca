@@ -45,6 +45,8 @@ from src.admin.routes.health import router as health_router
 from src.admin.routes.allowlist import router as allowlist_router
 from src.admin.routes.logs import router as logs_router
 from src.admin.routes.lifecycle import router as lifecycle_router
+from src.admin.routes.credentials import router as credentials_router
+from src.admin.routes.isolation import router as isolation_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -185,6 +187,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from src.admin.primitives.lifecycle import ensure_lifecycle_lock_file  # noqa: PLC0415
     ensure_lifecycle_lock_file()
 
+    # Step 5c: Load (or create) the fingerprint salt (Phase 3, SPEC-27-P3 section 4.3).
+    # The salt is a 32-byte random value stored at ~/.agentarca/fingerprint-salt (0600).
+    # It is loaded ONCE at startup and stored in app.state.fingerprint_salt.
+    # It is NEVER placed in any env var, log, audit record, or HTTP response.
+    from src.admin.primitives.credentials import _load_or_create_salt  # noqa: PLC0415
+    fingerprint_salt = _load_or_create_salt()  # raises SystemExit(1) on hard error
+
     # Log startup info at factory time (AC-27-P0-08: startup log contains bind address).
     # Never log secret or session_key.
     logger.info(
@@ -206,10 +215,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
 
-    # Bind secret and audit path to app state (never stored in os.environ).
+    # Bind secret, audit path, and fingerprint salt to app state.
+    # None of these are stored in os.environ.
+    # fingerprint_salt is NEVER returned in any response, log, or audit record.
     app.state.secret = secret
     app.state.audit_log_path = settings.audit_log_path
     app.state.settings = settings
+    app.state.fingerprint_salt = fingerprint_salt
 
     # Step 6: Register middlewares.
     # Starlette's add_middleware() PREPENDS to user_middleware, so the last call
@@ -248,6 +260,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(logs_router)
     # Phase 2 router (mounted behind the same middleware chain; no middleware changes).
     app.include_router(lifecycle_router)
+    # Phase 3 routers (mounted behind the same middleware chain; no middleware changes).
+    app.include_router(credentials_router)
+    app.include_router(isolation_router)
 
     # Serve the static frontend. Mounted AFTER routers so /api/* takes priority.
     static_dir = Path(__file__).parent / "static"

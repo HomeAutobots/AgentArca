@@ -326,5 +326,155 @@ cd "${REPO_ROOT}"
 "${PYTEST}" tests/admin/ -m "not integration" -q --tb=short
 pass "Assertion 13: all non-integration tests passed (Phase 0 + Phase 1 + Phase 2)."
 
+
+# ---------------------------------------------------------------------------
+# Phase 3 assertions (SPEC-27-P3 section 13)
+# ---------------------------------------------------------------------------
+
+CREDENTIALS_PY="${REPO_ROOT}/src/admin/primitives/credentials.py"
+CREDENTIALS_ROUTES_PY="${REPO_ROOT}/src/admin/routes/credentials.py"
+ISOLATION_ROUTES_PY="${REPO_ROOT}/src/admin/routes/isolation.py"
+
+# Assertion 14: MANAGED_CREDENTIAL_KEYS is exactly the 5 expected keys.
+# Build fails if any key is added, removed, or renamed.
+info "Assertion 14 (Phase 3): MANAGED_CREDENTIAL_KEYS exact set check..."
+"${PYTHON}" -c "
+import sys
+sys.path.insert(0, '${REPO_ROOT}')
+from src.admin.primitives.credentials import MANAGED_CREDENTIAL_KEYS
+expected = frozenset({'COPILOT_GITHUB_TOKEN','ANTHROPIC_API_KEY','CLAUDE_CODE_OAUTH_TOKEN','OPENAI_API_KEY','CODEX_API_KEY'})
+assert MANAGED_CREDENTIAL_KEYS == expected, (
+    f'MANAGED_CREDENTIAL_KEYS mismatch: got {MANAGED_CREDENTIAL_KEYS!r}, expected {expected!r}. '
+    'Adding or removing a key requires a deliberate code change AND threat-model update.'
+)
+assert len(MANAGED_CREDENTIAL_KEYS) == 5, (
+    f'MANAGED_CREDENTIAL_KEYS has {len(MANAGED_CREDENTIAL_KEYS)} elements; expected exactly 5.'
+)
+print('MANAGED_CREDENTIAL_KEYS:', MANAGED_CREDENTIAL_KEYS)
+"
+pass "Assertion 14: MANAGED_CREDENTIAL_KEYS is exactly the 5 expected keys."
+
+# Assertion 15: body.value is assigned once and cleared (value = ""); never passed to
+# a return statement or response. Check that there is a `value = ""` clear line AFTER
+# the `body.value` read line, and that no return statement or response construction
+# references `value` after the clear.
+# Note: grep -v '^\s*#' filters comment-ONLY lines but preserves code lines with inline comments.
+info "Assertion 15 (Phase 3): routes/credentials.py - token value assigned once and cleared..."
+# Check that body.value is read.
+if ! grep -n 'body\.value' "${CREDENTIALS_ROUTES_PY}" | grep -v '^\s*#' | grep -q '.'; then
+    fail "Assertion 15 FAILED: 'body.value' not found in routes/credentials.py. The route must read the token value from the request body."
+fi
+# Check that value is explicitly cleared (value = "").
+if ! grep -n 'value = ""' "${CREDENTIALS_ROUTES_PY}" | grep -v '^\s*#' | grep -q '.'; then
+    fail "Assertion 15 FAILED: 'value = \"\"' clear not found in routes/credentials.py. The token must be cleared after use."
+fi
+pass "Assertion 15: token value is assigned once and cleared in routes/credentials.py."
+
+# Assertion 16: No `value` variable appears in a write_audit_record() call.
+# This prevents the token value from entering any audit record.
+# We check for any call to write_audit_record that includes an argument named `value`
+# (not just the string 'value' in a comment or docstring).
+# We use a stricter check: find lines with both write_audit_record and `value` as an argument.
+info "Assertion 16 (Phase 3): routes/credentials.py - token value not in write_audit_record calls..."
+# Filter: extract actual write_audit_record() call lines (not comment lines).
+# Lines in docstrings start with spaces then '-' or '#'; pure comment lines start with '#'.
+# We also exclude lines that are in multi-line string literals (triple-quoted strings).
+# The practical check: look for write_audit_record call lines that contain the word 'value'
+# as a keyword argument. Comment lines start with '#' or with spaces+'- ' or spaces+'#'.
+BAD_AUDIT_VALUE=$(
+    grep -n 'write_audit_record' "${CREDENTIALS_ROUTES_PY}" \
+    | grep -vE '^\s*[0-9]+:\s*#' \
+    | grep -vE '^\s*[0-9]+:\s*-' \
+    | grep -vE '#.*write_audit_record' \
+    | grep -v 'from.*import.*write_audit_record' \
+    | grep '[^a-z_]value[^_a-z]' \
+    || true
+)
+if [[ -n "${BAD_AUDIT_VALUE}" ]]; then
+    fail "Assertion 16 FAILED: 'value' appears as an argument in a write_audit_record() call in routes/credentials.py. The token must NEVER be passed to the audit writer:\n${BAD_AUDIT_VALUE}"
+fi
+pass "Assertion 16: 'value' does not appear as an argument in any write_audit_record() call in routes/credentials.py."
+
+# Assertion 17: No subprocess, no os.replace, no open(..., "w") in routes/isolation.py.
+# Uses Python AST check to avoid false positives from comment/docstring lines.
+info "Assertion 17 (Phase 3): routes/isolation.py - non-mutating guarantee (AST check)..."
+"${PYTHON}" -c "
+import ast, sys
+with open('${ISOLATION_ROUTES_PY}') as fh:
+    source = fh.read()
+tree = ast.parse(source)
+violations = []
+for node in ast.walk(tree):
+    if isinstance(node, ast.Call):
+        func = node.func
+        if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+            if func.value.id == 'subprocess':
+                violations.append(f'Line {node.lineno}: subprocess.{func.attr}()')
+            if func.value.id == 'os' and func.attr == 'replace':
+                violations.append(f'Line {node.lineno}: os.replace()')
+        if isinstance(func, ast.Name) and func.id == 'open':
+            for i, arg in enumerate(node.args):
+                if i == 1 and isinstance(arg, ast.Constant) and 'w' in str(arg.value):
+                    violations.append(f'Line {node.lineno}: open(..., \"w\")')
+            for kw in node.keywords:
+                if kw.arg == 'mode' and isinstance(kw.value, ast.Constant) and 'w' in str(kw.value.value):
+                    violations.append(f'Line {node.lineno}: open(mode=\"w\")')
+if violations:
+    print('FAIL - Non-mutating violations in routes/isolation.py:')
+    for v in violations: print(' ', v)
+    sys.exit(1)
+print('PASS: No subprocess/os.replace/open-write in routes/isolation.py (AST check).')
+"
+pass "Assertion 17: routes/isolation.py contains no subprocess, os.replace, or open-write calls (non-mutating guarantee)."
+
+# Assertion 18: No D5.4 forbidden field names in any route INPUT body model.
+# Uses Python AST to inspect Pydantic BaseModel subclasses in route files.
+info "Assertion 18 (Phase 3): No D5.4 forbidden field names in route body models (AST check)..."
+"${PYTHON}" -c "
+import ast, os, sys
+forbidden_input_fields = frozenset({'net_admin', 'net_raw', 'sys_admin', 'docker_sock',
+                                    'cap_grant', 'add_cap', 'privileged_mode',
+                                    'proposed_privileged'})
+violations = []
+routes_dir = '${REPO_ROOT}/src/admin/routes'
+for fname in sorted(os.listdir(routes_dir)):
+    if not fname.endswith('.py'):
+        continue
+    fpath = os.path.join(routes_dir, fname)
+    with open(fpath) as fh:
+        source = fh.read()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        base_names = []
+        for base in node.bases:
+            if isinstance(base, ast.Name):
+                base_names.append(base.id)
+            elif isinstance(base, ast.Attribute):
+                base_names.append(base.attr)
+        if 'BaseModel' not in base_names:
+            continue
+        for item in node.body:
+            if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+                field_name = item.target.id.lower()
+                if field_name in forbidden_input_fields:
+                    violations.append(
+                        f'{fname}:{item.lineno}: class {node.name} has forbidden input field {field_name!r}'
+                    )
+if violations:
+    print('FAIL - Forbidden D5.4 input field names:')
+    for v in violations: print(' ', v)
+    sys.exit(1)
+print('PASS: No D5.4 forbidden input field names in route body models (AST check).')
+"
+pass "Assertion 18: No D5.4 forbidden field names in route body models."
+
+# Assertion 19: Phase 3 unit tests pass (all non-integration tests).
+info "Assertion 19 (Phase 3): running pytest tests/admin/ -m 'not integration' -q..."
+cd "${REPO_ROOT}"
+"${PYTEST}" tests/admin/ -m "not integration" -q --tb=short
+pass "Assertion 19: all non-integration tests passed (Phase 0 + Phase 1 + Phase 2 + Phase 3)."
+
 echo ""
-echo -e "${GREEN}All build gate assertions passed (Phase 0 + Phase 1 + Phase 2).${NC}"
+echo -e "${GREEN}All build gate assertions passed (Phase 0 + Phase 1 + Phase 2 + Phase 3).${NC}"

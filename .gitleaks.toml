@@ -38,4 +38,21 @@ regexes = [
   # the Docker-free test harness (TestClient against a temp secret file); never
   # a real credential. File: tests/admin/test_redteam_phase2.py, TEST_SECRET.
   '''TEST_SECRET\s*=\s*"test-secret-value-12345"''',
+  # Phase 3 credentials canary tokens: AC-27-P3-02 sentinel test submits CANARY_TOKEN
+  # as a token value to PUT /api/v1/credentials/{key} and asserts it NEVER appears in
+  # the HTTP response body, the audit log, or any log stream. CANARY_TOKEN_SUBSTR is
+  # the substring checked in nested output. Not real GitHub PATs; ghp_ prefix is
+  # intentional to exercise the GitHub-token shaped detector.
+  # File: tests/admin/test_credentials_api.py, CANARY_TOKEN / CANARY_TOKEN_SUBSTR.
+  '''CANARY_TOKEN\s*=\s*"TEST-TOKEN-CANARY-ghp_XYZ123456"''',
+  '''CANARY_TOKEN_SUBSTR\s*=\s*"ghp_XYZ123456"''',
+  # Phase 3 fingerprint tests: these ghp_-prefixed string literals are plausible
+  # GitHub PAT format tokens used ONLY as inputs to compute_fingerprint() in
+  # unit tests that verify fingerprint determinism, salt non-reversibility, and
+  # non-cleartext output. No real token; the exact value has no privileges.
+  # File: tests/admin/test_credentials_primitive.py (multiple lines).
+  '''token\s*=\s*"ghp_ABCDEF1234567890abcdef1234567890"''',
+  '''compute_fingerprint\("ghp_DIFFERENT1234567890abcdef123456"''',
+  '''real_token\s*=\s*"ghp_"\s*\+\s*"A"\s*\*\s*36''',
+  '''different_token\s*=\s*"ghp_"\s*\+\s*"B"\s*\*\s*36''',
 ]

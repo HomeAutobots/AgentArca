@@ -16,6 +16,7 @@ import os
 import stat
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,10 @@ class Settings:
     # session_secret_key is loaded/generated at startup; default empty forces explicit init.
     session_secret_key: str = ""
     session_ttl: int = 8 * 3600  # 8 hours in seconds
+    # repo_root: optional override for the repo root path (used by Phase 3 credential/isolation
+    # routes to locate the .env file and docker-compose.yml). If None, each primitive
+    # resolves the path from its own __file__ location (the default).
+    repo_root: Optional[Path] = None
 
 
 def load_settings(
