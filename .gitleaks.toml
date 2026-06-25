@@ -28,4 +28,14 @@ regexes = [
   # response body (Finding 1 + Finding 2, both fixed). Not a real secret.
   # File: tests/admin/test_redteam_phase1.py, class TestAuditTamperAndSecretExfil.
   '''SECRET_CANARY\s*=\s*"RT-PHASE1-SECRET-CANARY-9f8e7d"''',
+  # Phase 2 red-team canary: the adversarial suite (221 attack cases, 7 classes)
+  # submits this as a profile path param and via switch body fields to prove the
+  # value is never echoed in a response body or persisted to the audit log.
+  # Not a real secret. File: tests/admin/test_redteam_phase2.py,
+  # class TestAuditTamperAndSecretExfil.
+  '''SECRET_CANARY\s*=\s*"RT-PHASE2-SECRET-CANARY-7a6b5c"''',
+  # Phase 2 red-team test fixture secret: a hardcoded dummy value used only in
+  # the Docker-free test harness (TestClient against a temp secret file); never
+  # a real credential. File: tests/admin/test_redteam_phase2.py, TEST_SECRET.
+  '''TEST_SECRET\s*=\s*"test-secret-value-12345"''',
 ]
