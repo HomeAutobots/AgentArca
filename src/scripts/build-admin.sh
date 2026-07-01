@@ -50,6 +50,8 @@ if [[ "${1:-}" == "--init" ]]; then
     chmod 600 "${SECRET_FILE}"
     echo "Admin secret generated at ${SECRET_FILE} (mode 0600)."
     echo "IMPORTANT: treat this file as a credential. Do not commit it, log it, or share it."
+    mkdir -p -m 0700 "${HOME}/.agentarca/start-auth.d"
+    echo "Start-auth nonce directory created at ${HOME}/.agentarca/start-auth.d (mode 0700)."
     exit 0
 fi
 

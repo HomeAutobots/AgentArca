@@ -1,0 +1,52 @@
+# tests/containment/compose.rt29-interlock-override.yml
+#
+# Compose override for the SPEC-29-P0 PORTAL STARTUP INTERLOCK containment suite (rt29).
+# Applied with: docker compose -p rt29-interlock -f docker-compose.yml \
+#               -f tests/containment/compose.rt29-interlock-override.yml --profile copilot ...
+#
+# FRAME: "ASSUME THE OPERATOR/AGENT IS HOSTILE AND STARTS A GATEWAY WITHOUT PORTAL
+# AUTHORIZATION; prove it is BLOCKED." A passing containment case = the gateway
+# fail-closed at its entrypoint nonce check (never reaches firewall init or Squid).
+#
+# WHY AN OVERRIDE (not the real mount): the shipped base compose binds the nonce
+# directory from ${HOME}/.agentarca/start-auth.d (docker-compose.yml:161). This
+# override REDIRECTS /run/start-auth to a TEST-ISOLATED directory under the repo
+# (./tests/containment/.rt29-start-auth.d) so the runner can drive the nonce state
+# (absent / malformed / expired / wrong-profile / fresh) WITHOUT ever writing to the
+# real ~/.agentarca/start-auth.d. The long-syntax bind on target /run/start-auth wins
+# over the base short-syntax entry (same container path), the same masking technique
+# the rt25 overrides use for /etc/squid/local.d.
+#
+# Distinct project (rt29-interlock) + distinct external subnets (10.48.x) keep this
+# stack from colliding with any running profile (the default-project stack, acc15,
+# rt16, rt25) or its production 172.31/172.30 subnets. The runner pre-creates the
+# external networks and tears them down.
+#
+# Only the GATEWAY service is exercised: the fail-closed nonce check runs at gateway
+# entrypoint BEFORE init-firewall.sh, so no devcontainer / cache services are needed
+# to prove the raw-compose bypass is blocked.
+
+services:
+  gateway-copilot:
+    container_name: !reset null
+    mem_limit: 1g
+    # REDIRECT the nonce mount to a runner-controlled test directory (masks the base
+    # ${HOME}/.agentarca/start-auth.d mount). read_only mirrors the production posture.
+    # Mask the developer-local allowlist overlay too (containment runs against baked config).
+    volumes:
+      - type: bind
+        source: ./tests/containment/.rt29-start-auth.d
+        target: /run/start-auth
+        read_only: true
+      - type: bind
+        source: ./tests/acceptance/fixtures/empty-local.d
+        target: /etc/squid/local.d
+        read_only: true
+
+networks:
+  agent-net:
+    name: rt29-interlock_agent-net
+    external: true
+  cache-net:
+    name: rt29-interlock_cache-net
+    external: true

@@ -156,6 +156,19 @@ async def profile_up(request: Request, profile: str) -> JSONResponse:
             },
         )
 
+    # Write lifecycle_up_intent audit BEFORE run_in_executor (SPEC-29-P0 / AC-012-5).
+    # mint_nonce runs inside do_up under the lifecycle flock. Any route-level write
+    # before run_in_executor precedes the nonce mint by construction.
+    _write_audit(
+        request, session_id,
+        action="lifecycle_up_intent",
+        target=profile,
+        before=None,
+        after=None,
+        outcome="applied",
+        detail="start_authorization_minted",
+    )
+
     # Step 2: Run the lifecycle operation in a thread (synchronous flock + compose).
     loop = asyncio.get_event_loop()
     res = await loop.run_in_executor(None, do_up, profile, secret)
@@ -472,6 +485,19 @@ async def profile_switch(request: Request) -> JSONResponse:
             status_code=status.HTTP_200_OK,
             content={"ok": True, "idempotent": True, "from": from_profile, "to": to_profile},
         )
+
+    # Write lifecycle_up_intent audit for to_profile BEFORE run_in_executor (SPEC-29-P0 / AC-012-5).
+    # mint_nonce for to_profile runs inside do_switch under the lifecycle flock. Any route-level
+    # write before run_in_executor precedes the nonce mint by construction.
+    _write_audit(
+        request, session_id,
+        action="lifecycle_up_intent",
+        target=to_profile,
+        before=None,
+        after=None,
+        outcome="applied",
+        detail="start_authorization_minted",
+    )
 
     loop = asyncio.get_event_loop()
     res = await loop.run_in_executor(None, do_switch, from_profile, to_profile, secret)

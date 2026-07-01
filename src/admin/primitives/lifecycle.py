@@ -34,6 +34,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from src.admin.primitives.nonce import consume_nonce, mint_nonce
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -415,6 +417,10 @@ def do_up(profile: str, secret: str) -> dict:
                     "detail": "idempotent",
                     "http_status": 200,
                 }
+            # Mint start-authorization nonce (SPEC-29-P0 / ADR-012 D3).
+            # Called AFTER the running-state mutex check and BEFORE compose_up.
+            # The lifecycle flock is still held at this point.
+            mint_nonce(profile)
             # Bring the profile up.
             result = compose_up(profile)
             if result.returncode != 0:
@@ -428,6 +434,7 @@ def do_up(profile: str, secret: str) -> dict:
             healthy = wait_for_gateway_healthy(profile)
             if not healthy:
                 _teardown_profile(profile, secret)
+                consume_nonce(profile)   # clean up nonce on health-gate timeout
                 timeout_secs = _gateway_health_timeout()
                 return {
                     "outcome": "gateway_timeout",
@@ -435,6 +442,7 @@ def do_up(profile: str, secret: str) -> dict:
                     "timeout_seconds": timeout_secs,
                     "http_status": 503,
                 }
+            consume_nonce(profile)   # nonce served its purpose; gateway is healthy
             return {
                 "outcome": "applied",
                 "detail": "",
@@ -492,6 +500,7 @@ def do_down(profile: str, secret: str) -> dict:
                     "detail": detail,
                     "http_status": 500,
                 }
+            consume_nonce(profile)   # consume after SUCCESSFUL compose_down (SPEC-29-P0)
             return {
                 "outcome": "applied",
                 "detail": "",
@@ -572,6 +581,12 @@ def do_switch(from_profile: str, to_profile: str, secret: str) -> dict:
                     "http_status": 500,
                 }
 
+            # Consume from-profile nonce after successful down (SPEC-29-P0).
+            consume_nonce(from_profile)
+
+            # Mint to-profile nonce before compose_up (SPEC-29-P0 / ADR-012 D3).
+            mint_nonce(to_profile)
+
             # Step 4: bring to_profile up.
             result = compose_up(to_profile)
             if result.returncode != 0:
@@ -586,6 +601,7 @@ def do_switch(from_profile: str, to_profile: str, secret: str) -> dict:
             healthy = wait_for_gateway_healthy(to_profile)
             if not healthy:
                 _teardown_profile(to_profile, secret)
+                consume_nonce(to_profile)   # clean up nonce on health-gate timeout
                 timeout_secs = _gateway_health_timeout()
                 return {
                     "outcome": "gateway_timeout",
@@ -594,6 +610,7 @@ def do_switch(from_profile: str, to_profile: str, secret: str) -> dict:
                     "http_status": 503,
                 }
 
+            consume_nonce(to_profile)   # nonce served its purpose; gateway is healthy
             return {
                 "outcome": "applied",
                 "detail": "",

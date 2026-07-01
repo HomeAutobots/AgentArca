@@ -176,6 +176,14 @@ The egress log endpoint returns an empty list with `status: "no_gateway_running"
 
 ### 4c. Profile lifecycle
 
+The portal is the authoritative start controller for gateway containers (SPEC-29-P0). Every
+`up` call mints a one-time nonce that the gateway container reads at entrypoint startup; without
+it the gateway fails closed and Squid never starts. This interlock only takes effect once the
+gateway images are rebuilt to include the new entrypoint. If you have pulled a new version of
+AgentArca, run `docker compose build gateway-copilot gateway-claude gateway-codex` before
+relying on the interlock. The break-glass emergency path and full activation/verification
+procedure are in `docs/runbook-break-glass.md`.
+
 The lifecycle domain starts and stops Compose profiles with mutual exclusion enforced. The `up` endpoint will refuse (409 Conflict) if a different profile is already running. Switching profiles does a down-then-up under one lock acquisition so there is no concurrent-up window.
 
 Allowed profiles: `copilot`, `claude`, `codex`.

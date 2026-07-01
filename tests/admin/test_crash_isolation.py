@@ -241,3 +241,195 @@ class TestSandboxNoPathToAuditLog:
                 admin_proc.wait(timeout=5)
             except Exception:
                 pass
+
+
+# ---------------------------------------------------------------------------
+# AC-29-P0-20 (AC-012-1): kill the portal AFTER the gateway is healthy; the
+# boot-time-only interlock must leave the runtime boundary completely unchanged.
+# Extends the crash-isolation proof (ADR-010 D7.2) to the SPEC-29-P0 startup interlock:
+# nothing in the runtime path consults or calls back to the portal.
+# ---------------------------------------------------------------------------
+
+import json as _json
+import re as _re
+import time
+
+
+def _compose_ps_rows():
+    result = subprocess.run(
+        ["docker", "compose", "ps", "--format", "json"],
+        capture_output=True, text=True, timeout=15, cwd=str(REPO_ROOT),
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return []
+    out = result.stdout.strip()
+    rows = []
+    if out.lstrip().startswith("["):
+        try:
+            rows = _json.loads(out)
+        except _json.JSONDecodeError:
+            rows = []
+    else:
+        for line in out.splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    rows.append(_json.loads(line))
+                except _json.JSONDecodeError:
+                    pass
+    return rows
+
+
+def _discover_healthy_gateway():
+    """Return (profile, gateway_container, health) for a running gateway, else (None, None, None)."""
+    for r in _compose_ps_rows():
+        svc = r.get("Service", "")
+        m = _re.match(r"^gateway-(\w+)$", svc)
+        state = (r.get("State", "") or "").lower()
+        if m and state == "running":
+            return m.group(1), r.get("Name", ""), (r.get("Health", "") or "").lower()
+    return None, None, None
+
+
+def _gateway_iptables(container: str) -> str:
+    """Read the gateway's egress firewall RULESET (filter + nat) as a stable string.
+
+    Strips iptables-save per-chain packet/byte counters ([pkts:bytes]) so the comparison
+    reflects RULE changes, not ambient traffic counters that tick regardless.
+    """
+    r = subprocess.run(
+        ["docker", "exec", container, "sh", "-c",
+         "command -v iptables-save >/dev/null 2>&1 && iptables-save 2>/dev/null | grep -v '^#' "
+         "|| { iptables -S 2>/dev/null; iptables -S -t nat 2>/dev/null; }"],
+        capture_output=True, text=True, timeout=20,
+    )
+    # Remove [N:M] counters (present on iptables-save chain-policy lines).
+    return _re.sub(r"\[[0-9]+:[0-9]+\]", "", r.stdout)
+
+
+@pytest.mark.integration
+class TestPortalKillPreservesInterlock:
+    """
+    AC-29-P0-20 / AC-012-1: With a profile started authorized and its gateway healthy, SIGKILL
+    the portal (admin control plane) process and assert the boundary is untouched:
+      - the gateway egress firewall rules are byte-identical before and after,
+      - the allowlist files are unchanged,
+      - the profile is still running and healthy (no state altered),
+      - no container has a runtime loopback route to the portal port (boot-time-only gate).
+
+    This proves the interlock does NOT introduce a runtime dependency on the portal
+    (ADR-010 D7.2 preserved): killing the portal changes nothing.
+    """
+
+    def test_portal_kill_after_healthy_leaves_boundary_unchanged(self, tmp_path):
+        profile, gateway, health = _discover_healthy_gateway()
+        if gateway is None:
+            pytest.fail(
+                "No running profile gateway found. AC-29-P0-20 needs a profile started "
+                "authorized and healthy. Bring one up (portal or break-glass) and retry. "
+                "Do NOT skip: this covers BLOCK condition AC-012-1 (D7.2)."
+            )
+        # Require healthy (the AC premise is 'after gateway reports healthy').
+        if health != "healthy":
+            # Poll briefly in case it is still coming up.
+            for _ in range(12):
+                _, _, health = _discover_healthy_gateway()
+                if health == "healthy":
+                    break
+                time.sleep(5)
+            if health != "healthy":
+                pytest.fail(f"gateway {gateway} is not healthy (health={health!r}); AC-29-P0-20 premise unmet.")
+
+        # BEFORE snapshot.
+        fw_before = _gateway_iptables(gateway)
+        assert fw_before.strip(), (
+            f"could not read the gateway egress ruleset from {gateway}; the unchanged-firewall "
+            "assertion would be vacuous. Aborting rather than passing on an empty capture."
+        )
+        allowlist_file = REPO_ROOT / "config" / "allowlist.local.d" / "overrides.conf"
+        allowlist_before = allowlist_file.read_text() if allowlist_file.exists() else ""
+        rows_before = _compose_ps_rows()
+        names_before = {r.get("Name", "") for r in rows_before}
+
+        # Start MY OWN portal (admin control plane) with an isolated HOME so its startup
+        # nonce reconciliation cannot touch the real ~/.agentarca.
+        home = tmp_path / "portal-home"
+        (home / ".agentarca").mkdir(parents=True, exist_ok=True)
+        secret_file = home / ".agentarca" / "admin-secret"
+        secret_file.write_text("test-portal-kill-secret\n", encoding="utf-8")
+        os.chmod(secret_file, 0o600)
+        portal_port = "18795"
+        env = os.environ.copy()
+        env["HOME"] = str(home)
+        env["AGENTARCA_ADMIN_SECRET_FILE"] = str(secret_file)
+        env["AGENTARCA_ADMIN_AUDIT_LOG"] = str(home / ".agentarca" / "admin-audit.jsonl")
+        env["AGENTARCA_ADMIN_PORT"] = portal_port
+
+        portal = subprocess.Popen(
+            [sys.executable, "-m", "src.admin.main", "--host", "127.0.0.1", "--port", portal_port],
+            env=env, cwd=str(REPO_ROOT),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        try:
+            # Confirm the portal is genuinely up on the HOST loopback.
+            host_up = False
+            for _ in range(20):
+                probe = subprocess.run(
+                    ["curl", "--max-time", "2", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+                     f"http://127.0.0.1:{portal_port}/api/v1/health"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if probe.stdout.strip() not in ("000", ""):
+                    host_up = True
+                    break
+                time.sleep(0.5)
+            assert host_up, f"portal did not come up on 127.0.0.1:{portal_port}"
+
+            # No runtime loopback callback path: from INSIDE the gateway, 127.0.0.1:<portal_port>
+            # is the gateway's own netns loopback, NOT the host portal. It must not be reachable.
+            reach = subprocess.run(
+                ["docker", "exec", gateway, "sh", "-c",
+                 f"curl --max-time 3 -s -o /dev/null -w '%{{http_code}}' "
+                 f"http://127.0.0.1:{portal_port}/api/v1/health 2>/dev/null || echo 000"],
+                capture_output=True, text=True, timeout=20,
+            )
+            assert reach.stdout.strip() != "200", (
+                f"the gateway REACHED the host portal loopback ({reach.stdout.strip()!r}); a runtime "
+                "callback path to the portal would violate the boot-time-only gate (D7.2/AC-012-1)."
+            )
+        finally:
+            # SIGKILL the portal (crash the control plane).
+            portal.kill()
+            try:
+                portal.wait(timeout=5)
+            except Exception:
+                pass
+
+        # Give the system a moment; the gateway must self-sustain with no portal present.
+        time.sleep(5)
+
+        # AFTER snapshot.
+        fw_after = _gateway_iptables(gateway)
+        allowlist_after = allowlist_file.read_text() if allowlist_file.exists() else ""
+        _, gw_after, health_after = _discover_healthy_gateway()
+        rows_after = _compose_ps_rows()
+        names_after = {r.get("Name", "") for r in rows_after}
+
+        # Egress firewall rules unchanged.
+        assert fw_after == fw_before, (
+            "gateway egress firewall rules CHANGED after the portal was killed. "
+            "The runtime boundary must not depend on the portal (AC-012-1 / D7.2). BLOCK."
+        )
+        # Allowlist unchanged.
+        assert allowlist_after == allowlist_before, (
+            "allowlist changed after the portal crash (AC-012-1 / D7.2). BLOCK."
+        )
+        # Profile still running + healthy; no state altered.
+        assert gw_after == gateway and health_after == "healthy", (
+            f"gateway state changed after portal kill (was {gateway}/healthy, now {gw_after}/{health_after})."
+        )
+        # No containers appeared or vanished as a result of the portal death.
+        assert names_after == names_before, (
+            f"container set changed after portal kill: added={names_after - names_before} "
+            f"removed={names_before - names_after}"
+        )

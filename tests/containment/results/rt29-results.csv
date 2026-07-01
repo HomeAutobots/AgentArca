@@ -1,0 +1,6 @@
+AC05-N1-absent-nonce,CONTAINED,0/3,FATAL matched /FATAL: start authorization missing for profile/; no firewall init  no Squid  health='starting'
+AC06-malformed-token,CONTAINED,0/3,FATAL matched /FATAL: malformed start authorization token/; no firewall init  no Squid  health='none'
+AC07-N2-expired-nonce,CONTAINED,0/3,FATAL matched /FATAL: start authorization expired/; no firewall init  no Squid  health='none'
+AC08-N3-profile-mismatch,CONTAINED,0/3,FATAL matched /FATAL: start authorization profile mismatch/; no firewall init  no Squid  health='none'
+AC26a-stale-gt300-failclosed,CONTAINED,0/3,FATAL matched /FATAL: start authorization expired/; no firewall init  no Squid  health='starting'
+AC26b-fresh-lt120-passes-gate,CONTAINED,1/1,fresh nonce verified AND reached firewall init (normal-start-inside-window; gate exit 0)

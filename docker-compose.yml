@@ -158,6 +158,7 @@ x-gateway-base: &gateway-base
   # All three gateway services inherit this mount via the <<: *gateway-base merge.
   volumes:
     - ./config/allowlist.local.d:/etc/squid/local.d:ro
+    - ${HOME}/.agentarca/start-auth.d:/run/start-auth:ro
   # Port forward for dev servers must be declared here (gateway owns the netns).
   # Uncomment and adjust for any dev server port forwarding:
   # ports:
