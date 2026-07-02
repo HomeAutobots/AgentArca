@@ -187,6 +187,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from src.admin.primitives.lifecycle import ensure_lifecycle_lock_file  # noqa: PLC0415
     ensure_lifecycle_lock_file()
 
+    # Step 5b-nonce (SPEC-29-P0): Bootstrap the nonce directory and purge any nonce files
+    # left by a previous portal crash. Non-fatal: a stale nonce will be rejected by the
+    # gateway's freshness check even if purge fails.
+    from src.admin.primitives.nonce import NONCE_DIR, purge_stale_nonces  # noqa: PLC0415
+    from src.admin.primitives.lifecycle import get_running_profiles  # noqa: PLC0415
+    NONCE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        running = get_running_profiles()
+        purge_stale_nonces(frozenset(running))
+    except Exception as _nonce_exc:  # noqa: BLE001
+        logger.warning("Nonce reconciliation failed at startup: %s", _nonce_exc)
+
     # Step 5c: Load (or create) the fingerprint salt (Phase 3, SPEC-27-P3 section 4.3).
     # The salt is a 32-byte random value stored at ~/.agentarca/fingerprint-salt (0600).
     # It is loaded ONCE at startup and stored in app.state.fingerprint_salt.

@@ -102,7 +102,52 @@ if [ -w /etc/squid/squid.conf ]; then
 fi
 
 # ============================================================
-# STEP 1: Initialize the firewall.
+# STEP 1: Start-authorization check (ADR-012 / SPEC-29-P0)
+# ============================================================
+# The portal or break-glass must have written a fresh nonce to /run/start-auth/<profile>
+# before starting this container. Absence or staleness means unauthorized start: fail closed.
+# Use AGENT_FRAGMENT (already validated against the three-value allowlist at entrypoint.sh:48-56)
+# rather than SQUID_AGENT_FRAGMENT directly, so the nonce check reuses the same validated token.
+_nonce_profile="${AGENT_FRAGMENT%.conf}"  # strip .conf suffix: "claude.conf" -> "claude"
+_nonce_file="/run/start-auth/${_nonce_profile}"
+
+if [[ ! -f "${_nonce_file}" ]]; then
+  echo "[gateway/entrypoint] FATAL: start authorization missing for profile '${_nonce_profile}'." >&2
+  echo "[gateway/entrypoint] Start this profile via the portal UI, 'agentarca up ${_nonce_profile}', or break-glass (src/scripts/break-glass-up.sh ${_nonce_profile})." >&2
+  exit 1
+fi
+
+# Read the three-line nonce file
+_nonce_token=$(sed -n '1p' "${_nonce_file}")
+_nonce_ts=$(sed -n '2p' "${_nonce_file}")
+_nonce_pname=$(sed -n '3p' "${_nonce_file}")
+
+# Validate token: exactly 64 lowercase hex chars
+if ! [[ "${_nonce_token}" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "[gateway/entrypoint] FATAL: malformed start authorization token." >&2
+  exit 1
+fi
+
+# Validate freshness: nonce must be <= 300 seconds old
+_now=$(date +%s)
+_age=$(( _now - _nonce_ts ))
+if (( _age < 0 || _age > 300 )); then
+  echo "[gateway/entrypoint] FATAL: start authorization expired (age=${_age}s, max=300s)." >&2
+  echo "[gateway/entrypoint] Re-start via: portal UI, 'agentarca up ${_nonce_profile}', or break-glass (src/scripts/break-glass-up.sh ${_nonce_profile})." >&2
+  exit 1
+fi
+
+# Validate profile name matches this gateway's fragment
+if [[ "${_nonce_pname}" != "${_nonce_profile}" ]]; then
+  echo "[gateway/entrypoint] FATAL: start authorization profile mismatch (got '${_nonce_pname}', expected '${_nonce_profile}')." >&2
+  exit 1
+fi
+
+echo "[gateway/entrypoint] Start authorization verified for profile '${_nonce_profile}'."
+# --- End startup authorization check ---
+
+# ============================================================
+# STEP 2: Initialize the firewall.
 # ============================================================
 echo "[gateway/entrypoint] Initializing firewall..."
 /usr/local/bin/init-firewall.sh
@@ -110,7 +155,7 @@ echo "[gateway/entrypoint] Initializing firewall..."
 echo "[gateway/entrypoint] Firewall initialized. Starting Squid..."
 
 # ============================================================
-# STEP 2: Verify config parses cleanly before launching.
+# STEP 3: Verify config parses cleanly before launching.
 # ============================================================
 echo "[gateway/entrypoint] Verifying Squid config..."
 squid -k parse -f /etc/squid/squid.conf 2>&1 || {
@@ -120,7 +165,7 @@ squid -k parse -f /etc/squid/squid.conf 2>&1 || {
 echo "[gateway/entrypoint] Squid config OK."
 
 # ============================================================
-# STEP 3: Start Squid in foreground.
+# STEP 4: Start Squid in foreground.
 # ============================================================
 # -N: no daemon fork (keep in foreground for Docker container lifecycle).
 exec squid -N -f /etc/squid/squid.conf

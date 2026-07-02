@@ -23,7 +23,11 @@ tests/*/results/summary-*.txt
 tests/*/results/summary-profiles-*.txt
 
 # --- separation guard: the design record lives in AgentArca-internal, never here ---
-/docs/
+# Operator runbooks for shipped tool features are tool artifacts, not design record
+# (SPEC-29-P0 sec 7.1 places runbook-break-glass.md in this repo), so they are
+# explicitly re-included below the guard.
+/docs/*
+!/docs/runbook-break-glass.md
 /specs/
 /plan/
 /CLAUDE.md
