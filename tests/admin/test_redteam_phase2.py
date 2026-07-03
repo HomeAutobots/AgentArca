@@ -1090,6 +1090,7 @@ class TestSwitchCannotLeaveTwoUp:
             teardown_spy["called_with"].append(profile)
 
         with patch(f"{_PRIM}.get_running_profiles", side_effect=fake_get_running), \
+             patch(f"{_PRIM}.get_credential_status", return_value=MagicMock(present=True)), \
              patch(f"{_PRIM}.compose_down", return_value=down_result), \
              patch(f"{_PRIM}.compose_up", return_value=up_result), \
              patch(f"{_PRIM}.wait_for_gateway_healthy", return_value=False), \
