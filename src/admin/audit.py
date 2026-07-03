@@ -41,7 +41,7 @@ VALID_OUTCOMES = frozenset(
 )
 
 VALID_DOMAINS = frozenset(
-    {"skeleton", "allowlist", "lifecycle", "credentials", "isolation"}
+    {"skeleton", "allowlist", "lifecycle", "credentials", "isolation", "portal_config"}
 )
 
 

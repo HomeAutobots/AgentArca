@@ -555,7 +555,11 @@ class TestGatewayHealthTimeout:
             compose_down_calls.append(profile)
             return MagicMock(returncode=0)
 
+        # P1: also mock get_credential_status so the credential gate passes.
+        mock_cred_status = MagicMock()
+        mock_cred_status.present = True
         with patch("src.admin.primitives.lifecycle.get_running_profiles", return_value=set()), \
+             patch("src.admin.primitives.lifecycle.get_credential_status", return_value=mock_cred_status), \
              patch("src.admin.primitives.lifecycle.compose_up", return_value=MagicMock(returncode=0)), \
              patch("src.admin.primitives.lifecycle.wait_for_gateway_healthy", return_value=True), \
              patch("src.admin.primitives.lifecycle.compose_down", side_effect=fake_compose_down):

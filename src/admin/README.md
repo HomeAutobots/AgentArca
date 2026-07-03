@@ -184,6 +184,12 @@ AgentArca, run `docker compose build gateway-copilot gateway-claude gateway-code
 relying on the interlock. The break-glass emergency path and full activation/verification
 procedure are in `docs/runbook-break-glass.md`.
 
+**Credential readiness gate.** Before minting the nonce and calling `docker compose up`, the
+portal checks that the required credential for the requested profile is present in the managed
+`.env` store. If the credential is absent, the `up` call returns 400 (`credential_not_present`)
+and no gateway starts. The attempt is recorded in the audit log. To set credentials and walk
+through the guided setup flow, see section 4e and `docs/runbook-onboarding.md`.
+
 The lifecycle domain starts and stops Compose profiles with mutual exclusion enforced. The `up` endpoint will refuse (409 Conflict) if a different profile is already running. Switching profiles does a down-then-up under one lock acquisition so there is no concurrent-up window.
 
 Allowed profiles: `copilot`, `claude`, `codex`.
@@ -261,6 +267,75 @@ The following values are permanently hard-refused by the isolation domain. There
 
 To change isolation knobs, edit `docker-compose.yml` directly and restart the profile. The console reflects the current posture; it does not provide a write path to it.
 
+### 4e. Onboarding
+
+The Onboarding page at `/onboarding.html` provides a step-by-step credential
+setup wizard for each agent profile. A profile cannot start until its required
+credential is set in the managed `.env` store. The wizard walks you through the
+steps for each profile and shows a readiness status that updates as you work.
+
+The credential-to-profile mapping:
+
+| Profile | Required credential | Notes |
+|---------|---------------------|-------|
+| copilot | `COPILOT_GITHUB_TOKEN` | GitHub PAT with `copilot` scope |
+| claude | `CLAUDE_CODE_OAUTH_TOKEN` | Run `claude setup-token` in your host terminal; paste the printed value |
+| codex | `CODEX_API_KEY` or `OPENAI_API_KEY` | Either key satisfies; set via wizard or credentials API |
+
+The readiness API is available directly:
+
+```bash
+curl -s http://127.0.0.1:8770/api/v1/onboarding/claude/status \
+  -H "Cookie: agentarca_session=..."
+# {"profile":"claude","credential_present":true,"required_key":"CLAUDE_CODE_OAUTH_TOKEN","ready_to_start":true}
+```
+
+The wizard's Start button calls `POST /api/v1/onboarding/{profile}/start`, which
+uses the same lifecycle path (and the same readiness gate) as `POST /api/v1/profiles/{profile}/up`.
+
+**N2 warning.** Switching to an un-onboarded profile tears down the currently
+running profile first, then the readiness gate blocks the new start. You can
+end up with nothing running. Check readiness before switching. Full details and
+recovery steps: `docs/runbook-onboarding.md`.
+
+**The onboarding flow never widens the egress allowlist.** It only sets
+credentials and triggers lifecycle operations. No squid config is touched.
+
+### 4f. Settings
+
+The Settings page at `/settings.html` has one editable control: the
+observability pipeline toggle (also called the detection toggle).
+
+When enabled, a compose overlay adds the detection stack (immudb, ingest-proxy,
+otel-collector, jaeger) the next time a profile starts. When disabled (default),
+the overlay is not included.
+
+**This is not a security control.** Disabling it turns off observability data
+collection only. Egress controls are still enforced. Detection only controls
+observability data collection.
+
+The page also displays the four D5.4 isolation invariants as read-only labels.
+There are no editable controls for isolation knobs (NET_ADMIN, --privileged,
+docker.sock, concurrent profiles). Those are hard refusals and are not
+configurable through the portal.
+
+```bash
+# Read current settings
+curl -s http://127.0.0.1:8770/api/v1/portal-config \
+  -H "Cookie: agentarca_session=..."
+# {"detection_enabled": false}
+
+# Enable observability pipeline
+curl -s -X PATCH http://127.0.0.1:8770/api/v1/portal-config \
+  -H "Cookie: agentarca_session=..." \
+  -H "X-CSRF-Token: <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"detection_enabled": true}'
+```
+
+Only `{"detection_enabled": <bool>}` is accepted. Any other key returns 400.
+Full API details and toggle behavior: `docs/runbook-onboarding.md`.
+
 ---
 
 ## 5. Residual risks
@@ -296,6 +371,7 @@ All state files live under `~/.agentarca/`. Nothing under this directory should 
 | `~/.agentarca/fingerprint-salt` | Salt for credential fingerprinting (auto-generated) | 0600 |
 | `~/.agentarca/admin-audit.jsonl` | Append-only audit log | 0600 (written by the console) |
 | `~/.agentarca/lifecycle.lock` | Flock file for profile lifecycle mutual exclusion | created by the console |
+| `~/.agentarca/portal-config.json` | Portal preferences: detection toggle state | 0600; not bind-mounted into any container |
 | `.env` (repo root, next to `docker-compose.yml`) | Agent tokens for Compose interpolation | gitignored |
 | `config/allowlist.local.d/overrides.conf` | Mutable egress overlay (gitignored) | written by `allowlist-local.sh` |
 

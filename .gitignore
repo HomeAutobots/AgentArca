@@ -28,6 +28,8 @@ tests/*/results/summary-profiles-*.txt
 # explicitly re-included below the guard.
 /docs/*
 !/docs/runbook-break-glass.md
+!/docs/runbook-codex-device-auth.md
+!/docs/runbook-onboarding.md
 /specs/
 /plan/
 /CLAUDE.md

@@ -170,19 +170,11 @@ async def profile_up(request: Request, profile: str) -> JSONResponse:
     )
 
     # Step 2: Run the lifecycle operation in a thread (synchronous flock + compose).
+    # Pass the fingerprint salt so the credential readiness gate can check the .env store.
+    # env_path is None so the credential primitive auto-detects the repo-root .env.
+    _salt = getattr(request.app.state, "fingerprint_salt", None) or b""
     loop = asyncio.get_event_loop()
-    res = await loop.run_in_executor(None, do_up, profile, secret)
-
-    outcome_map = {
-        "applied": "applied",
-        "idempotent": "applied",
-        "rejected_mutex": "rejected-by-stop-and-flag",
-        "gateway_timeout": "error",
-        "compose_error": "error",
-        "lock_timeout": "error",
-        "error": "error",
-    }
-    audit_outcome = outcome_map.get(res["outcome"], "error")
+    res = await loop.run_in_executor(None, do_up, profile, secret, _salt, None)
 
     # Step 3: Write audit record BEFORE returning the response.
     if res["outcome"] == "applied":
@@ -235,6 +227,18 @@ async def profile_up(request: Request, profile: str) -> JSONResponse:
             after=None,
             outcome="error",
             detail="lock_timeout",
+        )
+    elif res["outcome"] == "rejected-by-validation":
+        # P1 credential gate: do_up returned 400 dict; route writes the audit record here.
+        # do_up does NOT write any audit record (SPEC-29-P1 sec 4.2 / B6).
+        _write_audit(
+            request, session_id,
+            action="lifecycle_up",
+            target=profile,
+            before=None,
+            after=None,
+            outcome="rejected-by-validation",
+            detail=res.get("detail", ""),
         )
     else:
         _write_audit(
@@ -295,6 +299,17 @@ async def profile_up(request: Request, profile: str) -> JSONResponse:
                 "ok": False,
                 "error": "lifecycle_lock_timeout",
                 "detail": "another lifecycle operation is in progress; retry in a moment",
+            },
+        )
+    if res["outcome"] == "rejected-by-validation":
+        # P1 credential gate returned 400; the audit record was already written above.
+        _detail_rbv = _sanitize(res.get("detail", ""), secret)
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "ok": False,
+                "error": "credential_not_present",
+                "detail": _detail_rbv[:500],
             },
         )
     # compose_error or generic error.
@@ -499,8 +514,10 @@ async def profile_switch(request: Request) -> JSONResponse:
         detail="start_authorization_minted",
     )
 
+    # Pass the fingerprint salt so the credential readiness gate can check the .env store.
+    _salt = getattr(request.app.state, "fingerprint_salt", None) or b""
     loop = asyncio.get_event_loop()
-    res = await loop.run_in_executor(None, do_switch, from_profile, to_profile, secret)
+    res = await loop.run_in_executor(None, do_switch, from_profile, to_profile, secret, _salt, None)
 
     # Audit record BEFORE response.
     switch_target = f"{from_profile}->{to_profile}"
@@ -556,6 +573,17 @@ async def profile_switch(request: Request) -> JSONResponse:
             after=None,
             outcome="error",
             detail="lock_timeout",
+        )
+    elif res["outcome"] == "rejected-by-validation":
+        # P1 credential gate for to_profile: do_switch returned 400; route writes audit here.
+        _write_audit(
+            request, session_id,
+            action="lifecycle_switch",
+            target=switch_target,
+            before=None,
+            after=None,
+            outcome="rejected-by-validation",
+            detail=res.get("detail", ""),
         )
     else:
         _write_audit(
@@ -614,6 +642,17 @@ async def profile_switch(request: Request) -> JSONResponse:
                 "ok": False,
                 "error": "lifecycle_lock_timeout",
                 "detail": "another lifecycle operation is in progress; retry in a moment",
+            },
+        )
+    if res["outcome"] == "rejected-by-validation":
+        # P1 credential gate for to_profile; the audit record was already written above.
+        _detail_sw_rbv = _sanitize(res.get("detail", ""), secret)
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "ok": False,
+                "error": "credential_not_present",
+                "detail": _detail_sw_rbv[:500],
             },
         )
     safe_detail_sw = _sanitize(res.get("detail", ""), secret)
