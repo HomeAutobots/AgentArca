@@ -742,8 +742,12 @@ class TestFlockSerialization:
         up_result.returncode = 0
         up_result.stdout = ""
         up_result.stderr = ""
+        # P1: mock get_credential_status so the credential gate passes.
+        mock_cred_status = MagicMock()
+        mock_cred_status.present = True
         lc.ensure_lifecycle_lock_file()
         with patch(f"{_PRIM}.get_running_profiles", return_value=set()), \
+             patch(f"{_PRIM}.get_credential_status", return_value=mock_cred_status), \
              patch(f"{_PRIM}.compose_up", return_value=up_result), \
              patch(f"{_PRIM}.wait_for_gateway_healthy", side_effect=probe_health):
             res = do_up("codex", secret="")
@@ -1086,6 +1090,7 @@ class TestSwitchCannotLeaveTwoUp:
             teardown_spy["called_with"].append(profile)
 
         with patch(f"{_PRIM}.get_running_profiles", side_effect=fake_get_running), \
+             patch(f"{_PRIM}.get_credential_status", return_value=MagicMock(present=True)), \
              patch(f"{_PRIM}.compose_down", return_value=down_result), \
              patch(f"{_PRIM}.compose_up", return_value=up_result), \
              patch(f"{_PRIM}.wait_for_gateway_healthy", return_value=False), \
@@ -1107,7 +1112,7 @@ class TestSwitchCannotLeaveTwoUp:
         """
         seen = {"switch": 0, "down": 0, "up": 0}
 
-        def fake_switch(f, t, s):
+        def fake_switch(f, t, s, *args, **kwargs):
             seen["switch"] += 1
             return {"outcome": "applied", "detail": "", "from_was_running": True, "http_status": 200}
 
@@ -1115,7 +1120,7 @@ class TestSwitchCannotLeaveTwoUp:
             seen["down"] += 1
             return {"outcome": "applied", "detail": "", "http_status": 200}
 
-        def fake_up(p, s):
+        def fake_up(p, s, *args, **kwargs):
             seen["up"] += 1
             return {"outcome": "applied", "detail": "", "http_status": 201}
 

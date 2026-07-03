@@ -47,6 +47,8 @@ from src.admin.routes.logs import router as logs_router
 from src.admin.routes.lifecycle import router as lifecycle_router
 from src.admin.routes.credentials import router as credentials_router
 from src.admin.routes.isolation import router as isolation_router
+from src.admin.routes.onboarding import router as onboarding_router
+from src.admin.routes.portal_config import router as portal_config_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -275,6 +277,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Phase 3 routers (mounted behind the same middleware chain; no middleware changes).
     app.include_router(credentials_router)
     app.include_router(isolation_router)
+    # Phase 4 routers (P1 portal config surface; no middleware changes).
+    app.include_router(onboarding_router)
+    app.include_router(portal_config_router)
 
     # Serve the static frontend. Mounted AFTER routers so /api/* takes priority.
     static_dir = Path(__file__).parent / "static"

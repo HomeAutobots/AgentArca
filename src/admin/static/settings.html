@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AgentArca Admin - Settings</title>
+  <style>
+    body { font-family: monospace; background: #1a1a1a; color: #e0e0e0; margin: 2rem; }
+    h1 { color: #4fc3f7; }
+    nav a { color: #4fc3f7; margin-right: 1rem; }
+    .card {
+      background: #2a2a2a; border: 1px solid #444; border-radius: 6px;
+      padding: 1.5rem; margin: 1.5rem 0; max-width: 560px;
+    }
+    h2 { color: #80cbc4; margin-top: 0; }
+    .toggle-row {
+      display: flex; align-items: center; gap: 1rem; margin: 1rem 0;
+    }
+    .toggle-label { color: #e0e0e0; font-size: 1em; }
+    /* Toggle switch */
+    .switch { position: relative; display: inline-block; width: 44px; height: 24px; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+      background: #424242; border-radius: 24px; transition: 0.2s;
+    }
+    .slider:before {
+      position: absolute; content: ""; height: 18px; width: 18px;
+      left: 3px; bottom: 3px; background: #e0e0e0; border-radius: 50%; transition: 0.2s;
+    }
+    input:checked + .slider { background: #0d47a1; }
+    input:checked + .slider:before { transform: translateX(20px); }
+    .framing-note {
+      background: #1a237e; border: 1px solid #283593; color: #90caf9;
+      padding: 0.7rem 1rem; border-radius: 4px; margin: 0.8rem 0; font-size: 0.9em;
+    }
+    .status-line { color: #b0bec5; font-size: 0.85em; margin-top: 0.5rem; }
+    .error { color: #ef9a9a; margin-top: 0.4rem; }
+    .success { color: #a5d6a7; margin-top: 0.4rem; }
+    .readonly-section { margin-top: 2rem; }
+    .readonly-section h2 { color: #78909c; }
+    .readonly-notice {
+      background: #212121; border: 1px solid #37474f; color: #78909c;
+      padding: 0.7rem 1rem; border-radius: 4px; font-size: 0.85em;
+    }
+    .readonly-invariant {
+      border-left: 3px solid #546e7a; padding: 0.3rem 0.8rem;
+      margin: 0.5rem 0; color: #90a4ae;
+    }
+  </style>
+</head>
+<body>
+  <h1>AgentArca Admin - Settings</h1>
+  <nav>
+    <a href="/index.html">Dashboard</a>
+    <a href="/onboarding.html">Onboarding</a>
+    <a href="/profiles.html">Profiles</a>
+    <a href="/credentials.html">Credentials</a>
+    <a href="/isolation.html">Isolation</a>
+  </nav>
+
+  <!-- Detection toggle card (B7 framing: observability, not security boundary) -->
+  <div class="card">
+    <h2>Observability Pipeline</h2>
+
+    <div class="framing-note">
+      <strong>Note:</strong> Enable observability pipeline controls whether the detection
+      overlay (immudb, ingest-proxy, otel-collector, jaeger) is included when starting a
+      profile. It does NOT affect egress controls.
+    </div>
+
+    <div class="toggle-row">
+      <label class="switch">
+        <input type="checkbox" id="detection-toggle" onchange="applyDetectionToggle()">
+        <span class="slider"></span>
+      </label>
+      <span class="toggle-label" id="toggle-label">Enable observability pipeline</span>
+    </div>
+
+    <!-- B7 mandatory framing: displayed when toggle is OFF -->
+    <div id="detection-off-notice" class="framing-note" style="display:none;">
+      Egress controls are still enforced. Detection only controls observability data collection.
+    </div>
+
+    <div id="toggle-status" class="status-line">Loading...</div>
+    <div id="toggle-error" class="error" style="display:none;"></div>
+  </div>
+
+  <!-- Read-only D5.4 isolation invariants (AC-29-P1-15: no editable controls) -->
+  <div class="readonly-section">
+    <h2>Isolation Invariants (read-only)</h2>
+    <div class="readonly-notice">
+      The following isolation controls are hard refusals enforced by the container
+      runtime and are NOT configurable through the portal. Attempting to set any of
+      these via the API returns 400. To inspect the current posture, see the
+      <a href="/isolation.html" style="color:#78909c;">Isolation</a> page.
+    </div>
+    <div class="readonly-invariant">NET_ADMIN / NET_RAW / SYS_ADMIN: always dropped</div>
+    <div class="readonly-invariant">--privileged: always refused</div>
+    <div class="readonly-invariant">docker.sock mount: always refused</div>
+    <div class="readonly-invariant">Concurrent profiles: always refused (one profile at a time)</div>
+  </div>
+
+  <script src="/settings.js"></script>
+</body>
+</html>

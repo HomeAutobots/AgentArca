@@ -506,7 +506,7 @@ class TestNoConcurrentUpDuringSwitch:
         do_down_calls = []
         do_up_calls = []
 
-        def fake_do_switch(from_profile, to_profile, secret):
+        def fake_do_switch(from_profile, to_profile, secret, *args, **kwargs):
             do_switch_calls.append((from_profile, to_profile))
             return {"outcome": "applied", "detail": "", "from_was_running": True, "http_status": 200}
 
@@ -514,7 +514,7 @@ class TestNoConcurrentUpDuringSwitch:
             do_down_calls.append(profile)
             return {"outcome": "applied", "detail": "", "http_status": 200}
 
-        def fake_do_up(profile, secret):
+        def fake_do_up(profile, secret, *args, **kwargs):
             do_up_calls.append(profile)
             return {"outcome": "applied", "detail": "", "http_status": 201}
 

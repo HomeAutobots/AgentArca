@@ -278,6 +278,7 @@ class TestRouteAuditOrdering:
             patch("src.admin.primitives.lifecycle.mint_nonce", side_effect=spy_mint),
             patch("src.admin.primitives.lifecycle.consume_nonce"),
             patch("src.admin.primitives.lifecycle.get_running_profiles", return_value=set()),
+            patch("src.admin.primitives.lifecycle.get_credential_status", return_value=MagicMock(present=True)),
             patch(
                 "src.admin.primitives.lifecycle.compose_up",
                 return_value=MagicMock(returncode=0),
@@ -309,6 +310,7 @@ class TestRouteAuditOrdering:
             patch("src.admin.primitives.lifecycle.mint_nonce"),
             patch("src.admin.primitives.lifecycle.consume_nonce"),
             patch("src.admin.primitives.lifecycle.get_running_profiles", return_value=set()),
+            patch("src.admin.primitives.lifecycle.get_credential_status", return_value=MagicMock(present=True)),
             patch(
                 "src.admin.primitives.lifecycle.compose_up",
                 return_value=MagicMock(returncode=0),
@@ -341,6 +343,7 @@ class TestRouteAuditOrdering:
             patch("src.admin.primitives.lifecycle.mint_nonce"),
             patch("src.admin.primitives.lifecycle.consume_nonce"),
             patch("src.admin.primitives.lifecycle.get_running_profiles", return_value=set()),
+            patch("src.admin.primitives.lifecycle.get_credential_status", return_value=MagicMock(present=True)),
             patch(
                 "src.admin.primitives.lifecycle.compose_up",
                 return_value=MagicMock(returncode=0),
@@ -383,6 +386,7 @@ class TestDoUpNonce:
         with (
             patch("src.admin.primitives.lifecycle.mint_nonce", side_effect=spy_mint),
             patch("src.admin.primitives.lifecycle.get_running_profiles", return_value=set()),
+            patch("src.admin.primitives.lifecycle.get_credential_status", return_value=MagicMock(present=True)),
             patch(
                 "src.admin.primitives.lifecycle.compose_up",
                 return_value=MagicMock(returncode=0),
@@ -419,6 +423,7 @@ class TestDoUpNonce:
         with (
             patch("src.admin.primitives.lifecycle.mint_nonce", side_effect=spy_mint),
             patch("src.admin.primitives.lifecycle.get_running_profiles", return_value=set()),
+            patch("src.admin.primitives.lifecycle.get_credential_status", return_value=MagicMock(present=True)),
             patch(
                 "src.admin.primitives.lifecycle.compose_up",
                 return_value=MagicMock(returncode=0),
@@ -558,6 +563,7 @@ class TestDoSwitchNonce:
 
         with (
             patch("src.admin.primitives.lifecycle.get_running_profiles", side_effect=fake_grp),
+            patch("src.admin.primitives.lifecycle.get_credential_status", return_value=MagicMock(present=True)),
             patch(
                 "src.admin.primitives.lifecycle.compose_down",
                 return_value=MagicMock(returncode=0),
@@ -612,6 +618,7 @@ class TestDoSwitchNonce:
 
         with (
             patch("src.admin.primitives.lifecycle.get_running_profiles", side_effect=fake_grp),
+            patch("src.admin.primitives.lifecycle.get_credential_status", return_value=MagicMock(present=True)),
             patch(
                 "src.admin.primitives.lifecycle.compose_down",
                 return_value=MagicMock(returncode=0),

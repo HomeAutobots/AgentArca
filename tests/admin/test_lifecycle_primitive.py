@@ -388,6 +388,7 @@ class TestMutexMocked:
         mock_up_result.returncode = 0
 
         with patch("src.admin.primitives.lifecycle.get_running_profiles", return_value=set()), \
+             patch("src.admin.primitives.lifecycle.get_credential_status", return_value=MagicMock(present=True)), \
              patch("src.admin.primitives.lifecycle.compose_up", return_value=mock_up_result), \
              patch("src.admin.primitives.lifecycle.wait_for_gateway_healthy", return_value=True):
             result = do_up("claude", secret="test-secret")
@@ -504,6 +505,7 @@ class TestSwitchDownFailClosed:
             return side_effects[idx] if idx < len(side_effects) else set()
 
         with patch("src.admin.primitives.lifecycle.get_running_profiles", side_effect=fake_get_running), \
+             patch("src.admin.primitives.lifecycle.get_credential_status", return_value=MagicMock(present=True)), \
              patch("src.admin.primitives.lifecycle.compose_down", return_value=mock_down_result), \
              patch("src.admin.primitives.lifecycle.compose_up", return_value=mock_up_result), \
              patch("src.admin.primitives.lifecycle.wait_for_gateway_healthy", return_value=True):
@@ -533,6 +535,7 @@ class TestGatewayHealthTimeout:
             return MagicMock(returncode=0)
 
         with patch("src.admin.primitives.lifecycle.get_running_profiles", return_value=set()), \
+             patch("src.admin.primitives.lifecycle.get_credential_status", return_value=MagicMock(present=True)), \
              patch("src.admin.primitives.lifecycle.compose_up", return_value=mock_up_result), \
              patch("src.admin.primitives.lifecycle.wait_for_gateway_healthy", return_value=False), \
              patch("src.admin.primitives.lifecycle.compose_down", side_effect=fake_compose_down):
@@ -555,7 +558,11 @@ class TestGatewayHealthTimeout:
             compose_down_calls.append(profile)
             return MagicMock(returncode=0)
 
+        # P1: also mock get_credential_status so the credential gate passes.
+        mock_cred_status = MagicMock()
+        mock_cred_status.present = True
         with patch("src.admin.primitives.lifecycle.get_running_profiles", return_value=set()), \
+             patch("src.admin.primitives.lifecycle.get_credential_status", return_value=mock_cred_status), \
              patch("src.admin.primitives.lifecycle.compose_up", return_value=MagicMock(returncode=0)), \
              patch("src.admin.primitives.lifecycle.wait_for_gateway_healthy", return_value=True), \
              patch("src.admin.primitives.lifecycle.compose_down", side_effect=fake_compose_down):
@@ -601,6 +608,7 @@ class TestSwitchUpHealthFailClosed:
             return side_effects[idx] if idx < len(side_effects) else set()
 
         with patch("src.admin.primitives.lifecycle.get_running_profiles", side_effect=fake_get_running), \
+             patch("src.admin.primitives.lifecycle.get_credential_status", return_value=MagicMock(present=True)), \
              patch("src.admin.primitives.lifecycle.compose_down", side_effect=fake_compose_down), \
              patch("src.admin.primitives.lifecycle.compose_up", return_value=mock_up_result), \
              patch("src.admin.primitives.lifecycle.wait_for_gateway_healthy", return_value=False):
@@ -644,6 +652,7 @@ class TestLockRelease:
         mock_up_result.returncode = 0
 
         with patch("src.admin.primitives.lifecycle.get_running_profiles", side_effect=fake_get_running), \
+             patch("src.admin.primitives.lifecycle.get_credential_status", return_value=MagicMock(present=True)), \
              patch("src.admin.primitives.lifecycle.compose_up", return_value=mock_up_result), \
              patch("src.admin.primitives.lifecycle.wait_for_gateway_healthy", return_value=True):
             # First call: raises internally, should return error dict.

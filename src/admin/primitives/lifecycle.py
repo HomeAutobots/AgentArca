@@ -35,6 +35,8 @@ from pathlib import Path
 from typing import Optional
 
 from src.admin.primitives.nonce import consume_nonce, mint_nonce
+from src.admin.primitives.credentials import get_credential_status
+from src.admin.primitives.portal_config import load_portal_config
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +61,23 @@ LIFECYCLE_LOCK_PATH = Path("~/.agentarca/lifecycle.lock").expanduser()
 # Repo root derived from this file's location:
 #   primitives/ -> admin/ -> src/ -> AgentArca/ (repo root)
 _REPO_ROOT: Path = Path(__file__).resolve().parent.parent.parent.parent
+
+# ---------------------------------------------------------------------------
+# Detection overlay allowlist (AC-29-P1-12; operator input never reaches this)
+# ---------------------------------------------------------------------------
+
+PERMITTED_OVERLAYS: frozenset = frozenset({"src/detect/docker-compose.detect.yml"})
+
+# ---------------------------------------------------------------------------
+# Profile-to-credential key mapping (P1 readiness gate, sec 4.1)
+# Codex accepts CODEX_API_KEY first, then OPENAI_API_KEY; either satisfies the gate.
+# ---------------------------------------------------------------------------
+
+_PROFILE_KEY_MAP: dict = {
+    "copilot": ("COPILOT_GITHUB_TOKEN",),
+    "claude": ("CLAUDE_CODE_OAUTH_TOKEN",),
+    "codex": ("CODEX_API_KEY", "OPENAI_API_KEY"),  # either satisfies; check in order
+}
 
 
 # ---------------------------------------------------------------------------
@@ -314,16 +333,33 @@ def wait_for_gateway_healthy(profile: str, timeout_seconds: Optional[int] = None
 # Compose subprocess calls (SPEC-27-P2 section 7)
 # ---------------------------------------------------------------------------
 
-def compose_up(profile: str, timeout: int = 300) -> subprocess.CompletedProcess:
+def compose_up(
+    profile: str,
+    overlay_files: "list[str] | None" = None,
+    timeout: int = 300,
+) -> subprocess.CompletedProcess:
     """
-    Run `docker compose --profile <profile> up -d`.
+    Run `docker compose [optional -f overlays] --profile <profile> up -d`.
+
+    overlay_files: list of additional -f paths relative to the compose file root.
+    Each path is validated against PERMITTED_OVERLAYS before use (AC-29-P1-12).
+    Raises ValueError for any path not in the allowlist.
 
     profile MUST be validated against ALLOWED_PROFILES before this call.
     Arguments are passed as a list (shell=False by default), not a shell string.
     cwd is the repo root so compose reads docker-compose.yml from there.
     """
+    for f in (overlay_files or []):
+        if f not in PERMITTED_OVERLAYS:
+            raise ValueError(
+                f"overlay path {f!r} is not in the permitted overlays allowlist"
+            )
+    cmd = ["docker", "compose"]
+    for f in (overlay_files or []):
+        cmd += ["-f", f]
+    cmd += ["--profile", profile, "up", "-d"]
     return subprocess.run(
-        ["docker", "compose", "--profile", profile, "up", "-d"],
+        cmd,
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -385,19 +421,29 @@ def _sanitize(value: str, secret: str) -> str:
     return value
 
 
-def do_up(profile: str, secret: str) -> dict:
+def do_up(
+    profile: str,
+    secret: str,
+    salt: bytes = b"",
+    env_path: Optional[Path] = None,
+) -> dict:
     """
     Execute the up lifecycle operation under the lifecycle lock.
 
     Returns a result dict with keys:
-      outcome: "applied" | "idempotent" | "rejected_mutex" | "error" | "lock_timeout"
-                | "gateway_timeout" | "compose_error"
+      outcome: "applied" | "idempotent" | "rejected_mutex" | "rejected-by-validation"
+                | "error" | "lock_timeout" | "gateway_timeout" | "compose_error"
       running_profile: str (only for rejected_mutex)
       detail: str
       http_status: int
 
     Raises nothing; all exceptions are caught and returned as error dicts.
     The lock is held from check-state through health-gate completion.
+
+    salt and env_path are used for the P1 credential readiness gate (sec 4.2).
+    env_path=None defaults to the repo-root .env (credentials.py default).
+    do_up does NOT write any audit record; the ROUTE writes the audit after
+    run_in_executor returns (see routes/lifecycle.py and SPEC-29-P0 sec 4.1).
     """
     try:
         with lifecycle_lock() as _:
@@ -417,12 +463,41 @@ def do_up(profile: str, secret: str) -> dict:
                     "detail": "idempotent",
                     "http_status": 200,
                 }
+            # Step 4 (P1 gate): credential readiness check.
+            # Runs inside lifecycle_lock, after running-state refuse, before mint_nonce.
+            # Returns a 400 dict on failure; never raises; no audit write inside do_up.
+            _salt = salt
+            _env_path = env_path
+            _required_keys = _PROFILE_KEY_MAP[profile]
+            _cred_ok = any(
+                get_credential_status(k, salt=_salt, env_path=_env_path).present
+                for k in _required_keys
+            )
+            if not _cred_ok:
+                _missing = "/".join(_required_keys)
+                _detail = (
+                    f"credential {_missing!r} not present for profile {profile!r}. "
+                    f"Use the portal onboarding wizard or PUT /api/v1/credentials/{{key}}."
+                )
+                # do_up returns the 400 dict; the ROUTE writes the rejected-by-validation
+                # audit record via _write_audit after run_in_executor returns this dict.
+                # No write_audit_record call inside do_up.
+                return {
+                    "outcome": "rejected-by-validation",
+                    "detail": _detail,
+                    "http_status": 400,
+                }
             # Mint start-authorization nonce (SPEC-29-P0 / ADR-012 D3).
-            # Called AFTER the running-state mutex check and BEFORE compose_up.
-            # The lifecycle flock is still held at this point.
+            # Called AFTER the running-state mutex check and credential gate,
+            # and BEFORE compose_up. The lifecycle flock is still held at this point.
             mint_nonce(profile)
+            # Determine detection overlay (SPEC-29-P1 sec 6.2).
+            _detection_enabled = load_portal_config().get("detection_enabled", False)
+            _overlay_files: "list[str] | None" = (
+                ["src/detect/docker-compose.detect.yml"] if _detection_enabled else None
+            )
             # Bring the profile up.
-            result = compose_up(profile)
+            result = compose_up(profile, overlay_files=_overlay_files)
             if result.returncode != 0:
                 detail = _sanitize(result.stderr[:500], secret)
                 return {
@@ -532,7 +607,13 @@ def do_down(profile: str, secret: str) -> dict:
         }
 
 
-def do_switch(from_profile: str, to_profile: str, secret: str) -> dict:
+def do_switch(
+    from_profile: str,
+    to_profile: str,
+    secret: str,
+    salt: bytes = b"",
+    env_path: Optional[Path] = None,
+) -> dict:
     """
     Execute the switch lifecycle operation under the lifecycle lock.
 
@@ -540,12 +621,14 @@ def do_switch(from_profile: str, to_profile: str, secret: str) -> dict:
       1. Check running state. Refuse 409 if a profile OTHER than from_profile is running.
       2. If from_profile is running: compose down from_profile.
       3. Verify from_profile is no longer running (fail-closed: if still running, 500, do NOT start to_profile).
-      4. compose up to_profile.
+      4a. (P1 gate) Credential readiness check for to_profile. Returns 400 if not present.
+      4b. compose up to_profile (with detection overlay if enabled).
       5. Health gate for to_profile (still under lock).
       6. On health timeout: tear down to_profile, 503.
       7. On success: 200.
 
     Returns a result dict with keys: outcome, detail, http_status.
+    salt and env_path are used for the P1 credential readiness gate for to_profile.
     """
     try:
         with lifecycle_lock() as _:
@@ -584,11 +667,39 @@ def do_switch(from_profile: str, to_profile: str, secret: str) -> dict:
             # Consume from-profile nonce after successful down (SPEC-29-P0).
             consume_nonce(from_profile)
 
+            # Step P1 gate: credential readiness check for to_profile.
+            # Runs inside lifecycle_lock, after from_profile is down, before mint_nonce.
+            # Returns a 400 dict on failure; no audit write inside do_switch.
+            _salt = salt
+            _env_path = env_path
+            _required_keys = _PROFILE_KEY_MAP[to_profile]
+            _cred_ok = any(
+                get_credential_status(k, salt=_salt, env_path=_env_path).present
+                for k in _required_keys
+            )
+            if not _cred_ok:
+                _missing = "/".join(_required_keys)
+                _detail = (
+                    f"credential {_missing!r} not present for profile {to_profile!r}. "
+                    f"Use the portal onboarding wizard or PUT /api/v1/credentials/{{key}}."
+                )
+                return {
+                    "outcome": "rejected-by-validation",
+                    "detail": _detail,
+                    "http_status": 400,
+                }
+
             # Mint to-profile nonce before compose_up (SPEC-29-P0 / ADR-012 D3).
             mint_nonce(to_profile)
 
+            # Determine detection overlay (SPEC-29-P1 sec 6.2).
+            _detection_enabled = load_portal_config().get("detection_enabled", False)
+            _overlay_files: "list[str] | None" = (
+                ["src/detect/docker-compose.detect.yml"] if _detection_enabled else None
+            )
+
             # Step 4: bring to_profile up.
-            result = compose_up(to_profile)
+            result = compose_up(to_profile, overlay_files=_overlay_files)
             if result.returncode != 0:
                 detail = _sanitize(result.stderr[:500], secret)
                 return {
