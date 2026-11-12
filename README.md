@@ -146,4 +146,4 @@ The egress boundary, isolation tier, and config immutability are proven for all 
 
 ## License
 
-No license yet. Add one before sharing.
+MIT. See [`LICENSE`](LICENSE).
